@@ -140,26 +140,16 @@ app.get("/api/boxes/:id", (req, res) => {
   }
 
   if (game.startsWith("Pokémon X/Y")) {
-    // XY layout only (no real parsing yet)
+    // XY has 31 boxes of 30 slots each
     const boxes = Array.from({ length: 31 }, (_, i) => ({
-      id: `box-${i + 1}`,
-      name: `Box ${i + 1}`,
-      mons: Array.from({ length: 30 }, (_, j) => ({ slot: j + 1, empty: true })),
+      id: `box-${i+1}`,
+      name: `Box ${i+1}`,
+      mons: Array.from({ length: 30 }, (_, j) => ({ slot: j+1, empty: true }))
     }));
-    return res.json({
-      game: "Pokémon X/Y (Citra)",
-      generation: 6,
-      boxes,
-      notes: "Layout only; parsing not implemented yet.",
-    });
+    return res.json({ game: "Pokémon X/Y (Citra)", generation: 6, boxes, notes: "Layout only; parsing not implemented yet." });
   }
 
-  return res.json({
-    game: "unknown",
-    generation: "unknown",
-    boxes: [],
-    notes: "No parser for this game yet. Set a manual override or upload a .pk* file.",
-  });
+  return res.json({ game: "unknown", generation: "unknown", boxes: [], notes: "No parser for this game yet." });
 });
 
 const port = process.env.PORT || 8080;
