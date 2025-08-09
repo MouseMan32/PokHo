@@ -1,0 +1,45 @@
+app.get("/api/boxes/:id", (req, res) => {
+  try {
+    const id = req.params.id;
+    const filePath = path.join(SAVES_DIR, id);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Save not found" });
+    }
+    const buf = fs.readFileSync(filePath);
+
+    // Check for manual override first
+    const override = readMeta(id)?.override?.game || "";
+    const filename = id.split("-").slice(2).join("-").toLowerCase();
+    const isSinglePK = /\.pk[1-9]$|\.pb[78]$/.test(filename);
+
+    if (isSinglePK) {
+      return res.json({
+        game: "Single Pokémon file",
+        generation: "unknown",
+        boxes: [
+          { id: "box-1", name: "Imported", mons: [{ slot: 1, label: filename, empty: false }] },
+        ],
+        notes: "Displayed as a single-slot import.",
+      });
+    }
+
+    // XY via override OR auto-detect by size
+    const looksXY = override.startsWith("Pokémon X/Y") || isLikelyXYSav(buf);
+    if (looksXY) {
+      const meta = xyReadMeta(buf);     // includes ok/game/generation/notes
+      const boxView = xyReadBoxes(buf); // layout for now
+      return res.json({ ...boxView, trainer: meta.trainer, notes: boxView.notes });
+    }
+
+    // Fallback
+    return res.json({
+      game: "unknown",
+      generation: "unknown",
+      boxes: [],
+      notes: "No parser for this game yet. Set a manual override or upload a .pk* file.",
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "Boxes error" });
+  }
+});
