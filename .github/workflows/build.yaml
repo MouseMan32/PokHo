@@ -1,0 +1,51 @@
+name: build-and-push
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./api
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/MouseMan32/openhome-api:latest
+            ghcr.io/MouseMan32/openhome-api:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
+
+      - name: Build & push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./web
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/MouseMan32/openhome-web:latest
+            ghcr.io/MouseMan32/openhome-web:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
