@@ -19,23 +19,35 @@ export function detectFormat(buf, filename) {
       kind: "pokemon-file",
       game: guessGameFromExt(ext), // e.g., pk6 -> Gen 6
       generation: guessGenFromExt(ext),
-      confidence: 0.95,
+      confidence: 0.98,
       notes: `Detected by extension .${ext}`,
     };
   }
 
-  // 2) Common 3DS save dumps (JKSV/Checkpoint): often named "main"
+  // 2) Heuristics for Citra/JKSV/Checkpoint "main" saves
   if (base === "main") {
+    // Known X/Y (Citra) sample we have: 0x65600 (415,232 bytes)
+    if (size === 0x65600) {
+      return {
+        kind: "save",
+        game: "Pokémon X/Y (Citra)",
+        generation: 6,
+        confidence: 0.95,
+        notes: "Citra-style 'main' with size 0x65600 matches known XY layout.",
+      };
+    }
+
+    // Future: add more known sizes for OR/AS, SM/USUM, etc.
     return {
       kind: "save",
       game: "unknown",
       generation: "unknown",
-      confidence: 0.4,
-      notes: "Looks like a 3DS/Switch save dump (file named 'main').",
+      confidence: 0.6,
+      notes: "File named 'main' (likely Citra/3DS/Switch save). Use 'Set Game' if not auto-detected.",
     };
   }
 
-  // 3) Generic fallback
+  // 3) Fallback
   return {
     kind: "unknown",
     game: "unknown",
@@ -45,16 +57,15 @@ export function detectFormat(buf, filename) {
   };
 }
 
-function guessGenFromExt(ext) {
+function genFromExt(ext) {
   if (ext.startsWith("pk")) {
     const n = Number(ext.replace("pk",""));
     if (!Number.isNaN(n)) return n;
   }
-  if (ext.startsWith("pb")) return 7; // HOME/Bank bridge files often Gen 7+ context
+  if (ext.startsWith("pb")) return 7; // HOME/Bank bridge context ~ Gen 7+
   return "unknown";
 }
-function guessGameFromExt(ext) {
-  const g = guessGenFromExt(ext);
+function gameFromGen(g) {
   if (g === 6) return "Gen 6 title (e.g., X/Y, OR/AS)";
   if (g === 7) return "Gen 7 title (e.g., SM/USUM, LGPE)";
   if (g === 8) return "Gen 8 title (e.g., Sw/Sh, BDSP, PLA)";
