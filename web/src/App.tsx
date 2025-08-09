@@ -20,6 +20,16 @@ export default function App(){
   }
   useEffect(()=>{ refresh() },[])
 
+  async function setOverride(id: string, game: string, generation = "6") {
+    const r = await fetch('/api/saves/override', {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify({ id, game, generation })
+    });
+    if (!r.ok) throw new Error('Failed to set override');
+ }
+
+
   async function validateById(id: string){
     const r = await fetch('/api/saves/validate', {
       method: 'POST',
