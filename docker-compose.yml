@@ -8,14 +8,14 @@ services:
     volumes:
       - saves:/data/saves
     ports:
-      - "8080:8080"
+      - "8095:8095"
 
   openhome-web:
     build: ./web
     container_name: openhome-web
     restart: unless-stopped
     ports:
-      - "8081:80"
+      - "8085:80"
     depends_on:
       - openhome-api
 
