@@ -37,8 +37,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/MouseMan32/openhome-api:latest
-            ghcr.io/MouseMan32/openhome-api:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
+            ghcr.io/mouseman32/openhome-api:latest
+            ghcr.io/mouseman32/openhome-api:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
 
       - name: Build & push Web image
         uses: docker/build-push-action@v6
@@ -47,5 +47,5 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/MouseMan32/openhome-web:latest
-            ghcr.io/MouseMan32/openhome-web:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
+            ghcr.io/mouseman32/openhome-web:latest
+            ghcr.io/mouseman32/openhome-web:${{ github.ref_type == 'tag' && github.ref_name || 'main' }}
