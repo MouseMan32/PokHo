@@ -20,10 +20,8 @@ import cors from "cors";
 // allow local dev ports only
 app.use(cors({
   origin: [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "http://localhost:8085",
+    "http://127.0.0.1:8085"
   ],
   credentials: false
 }));
@@ -248,5 +246,5 @@ app.get("/api/boxes/:id/export", (req, res) => {
 });
 
 /* ------------------------------- Start server ---------------------------- */
-const port = process.env.PORT || 8080;
+const port = process.env.PORT || 8095;
 app.listen(port, () => console.log(`openhome-api listening on :${port}`));
