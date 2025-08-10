@@ -18,13 +18,7 @@ import { readMeta, writeMeta } from "./store/meta.js";
 import cors from "cors";
 const app = express();
 // allow local dev ports only
-app.use(cors({
-  origin: [
-    "http://localhost:8085",
-    "http://127.0.0.1:8085"
-  ],
-  credentials: false
-}));
+app.use(cors({ origin: true, credentials: false }));
 
 
 app.use(express.json());
