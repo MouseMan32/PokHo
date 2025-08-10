@@ -6,33 +6,35 @@ import path from "path";
 import crypto from "crypto";
 
 import { detectFormat } from "./parsers/detect.js";
+import {
+  isLikelyXYSav,
+  readMetadata as xyReadMeta,
+  readBoxes as xyReadBoxes,
+  findBoxRegion,
+  XY
+} from "./parsers/gen6_xy.js";
 import { readMeta, writeMeta } from "./store/meta.js";
 
 const app = express();
 app.use(express.json());
 
+// Where uploaded saves live (mounted as a volume in docker-compose)
 const SAVES_DIR = process.env.SAVES_DIR || "/data/saves";
 fs.mkdirSync(SAVES_DIR, { recursive: true });
 
-// temp upload dir for multipart form-data
+// Temp dir for multipart uploads
 const upload = multer({ dest: "/tmp/uploads" });
 
-/**
- * Health check
- */
+/* ----------------------------- Health check ------------------------------ */
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-/**
- * List uploaded saves (filenames stored in SAVES_DIR)
- */
+/* ----------------------------- List all saves ---------------------------- */
 app.get("/api/saves", (_req, res) => {
   const files = fs.readdirSync(SAVES_DIR);
   res.json(files.map((f) => ({ id: f, name: f })));
 });
 
-/**
- * Upload saves (one or many). Files are persisted into SAVES_DIR with a unique id.
- */
+/* ------------------------------- Upload save ----------------------------- */
 app.post("/api/saves", upload.array("files"), (req, res) => {
   const uploaded = [];
   for (const file of req.files) {
@@ -43,25 +45,21 @@ app.post("/api/saves", upload.array("files"), (req, res) => {
   res.status(201).json({ uploaded });
 });
 
-/**
- * Manually override detected game/generation for a given uploaded save.
- * Body: { id: string, game: string, generation?: string|number }
- */
+/* ------------------------- Manual game/generation override --------------- */
 app.post("/api/saves/override", (req, res) => {
   const { id, game, generation } = req.body || {};
   if (!id || !game) return res.status(400).json({ error: "id and game required" });
   const meta = readMeta(id);
-  meta.override = { game, generation: generation ?? "6" }; // default gen 6 for X/Y
+  meta.override = { game, generation: generation ?? "6" };
   writeMeta(id, meta);
   res.json({ ok: true, override: meta.override });
 });
 
-/**
- * Validate a save to identify format & basic metadata.
- * Modes:
- *  A) multipart with field "file" (validate immediately, not persisted)
- *  B) JSON { id } to validate a previously uploaded file from SAVES_DIR
- */
+/* ----------------------------- Validate a save --------------------------- */
+/* Modes:
+   A) multipart with field "file" (validate immediately, not persisted)
+   B) JSON { id } to validate an already-uploaded file from SAVES_DIR
+*/
 app.post("/api/saves/validate", upload.single("file"), (req, res) => {
   try {
     let filePath, filename, uploadedId;
@@ -92,68 +90,112 @@ app.post("/api/saves/validate", upload.single("file"), (req, res) => {
       : detected;
 
     const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-    res.json({
-      filename,
-      size: buf.length,
-      sha256,
-      detection: finalDetection,
-    });
+    res.json({ filename, size: buf.length, sha256, detection: finalDetection });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Validation error" });
   } finally {
-    // Clean up temp file if this was a direct-upload validation
-    if (req.file) {
-      try { fs.unlinkSync(req.file.path); } catch {}
-    }
+    if (req.file) { try { fs.unlinkSync(req.file.path); } catch {} }
   }
 });
 
-/**
- * Boxes stub:
- * - If override says "Pokémon X/Y (Citra)", return XY-style grid (31 boxes x 30 slots), empty for now.
- * - If the uploaded file is a single Pokémon (.pk*/.pb*), surface a simple 1-box view.
- * - Otherwise, return empty until a specific parser is implemented.
- */
-app.get("/api/boxes/:id", (req, res) => {
+/* ------------------ Debug: scan for likely XY region offsets ------------- */
+app.get("/api/debug/xy/:id/scan", (req, res) => {
   const id = req.params.id;
-  const meta = readMeta(id);
-  const game = meta?.override?.game || "unknown";
-
-  // Single-Pokémon convenience: detect by filename extension
-  const filename = id.split("-").slice(2).join("-").toLowerCase();
-  const isPK = /\.pk[1-9]$|\.pb[78]$/.test(filename);
-
-  if (isPK) {
-    return res.json({
-      game: "Single Pokémon file",
-      generation: "unknown",
-      boxes: [
-        {
-          id: "box-1",
-          name: "Imported",
-          mons: [{ slot: 1, label: filename, empty: false }],
-        },
-      ],
-      notes: "Displayed as a single-slot import.",
-    });
+  const filePath = path.join(SAVES_DIR, id);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+  const buf = fs.readFileSync(filePath);
+  if (!isLikelyXYSav(buf)) {
+    return res.status(400).json({ error: "Save does not look like XY (Citra) by size" });
   }
-
-  if (game.startsWith("Pokémon X/Y")) {
-    // XY has 31 boxes of 30 slots each
-    const boxes = Array.from({ length: 31 }, (_, i) => ({
-      id: `box-${i+1}`,
-      name: `Box ${i+1}`,
-      mons: Array.from({ length: 30 }, (_, j) => ({ slot: j+1, empty: true }))
-    }));
-    return res.json({ game: "Pokémon X/Y (Citra)", generation: 6, boxes, notes: "Layout only; parsing not implemented yet." });
-  }
-
-  return res.json({ game: "unknown", generation: "unknown", boxes: [], notes: "No parser for this game yet." });
+  const view = xyReadBoxes(buf, undefined); // uses internal scan and returns debug candidates
+  res.json({
+    fileSize: buf.length,
+    candidates: view.debug || [],
+    note: "Pick the top offset; if it looks wrong, try the second."
+  });
 });
 
-// Export one XY slot as a .pk6 file (232 bytes). Empty slots return 204 No Content.
-app.get("/api/boxes/:id/export", async (req, res) => {
+/* ---------------- Manual set of XY region offset (persisted) ------------- */
+app.post("/api/saves/xy/region", (req, res) => {
+  const { id, offset } = req.body || {};
+  if (!id || offset === undefined) return res.status(400).json({ error: "id and offset required" });
+
+  let offNum = typeof offset === "string" && offset.trim().startsWith("0x")
+    ? Number(offset)
+    : Number(offset);
+
+  if (!Number.isInteger(offNum) || offNum < 0) return res.status(400).json({ error: "invalid offset" });
+
+  const meta = readMeta(id);
+  meta.xy = meta.xy || {};
+  meta.xy.boxOffset = offNum;
+  writeMeta(id, meta);
+  res.json({ ok: true, xy: meta.xy });
+});
+
+/* ----------------------- MAIN: get boxes/slots for a save ---------------- */
+app.get("/api/boxes/:id", (req, res) => {
+  try {
+    const id = req.params.id;
+    const filePath = path.join(SAVES_DIR, id);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
+    const buf = fs.readFileSync(filePath);
+    const filename = id.split("-").slice(2).join("-").toLowerCase();
+
+    // Single-Pokémon convenience: .pk* / .pb*
+    if (/\.pk[1-9]$|\.pb[78]$/.test(filename)) {
+      return res.json({
+        game: "Single Pokémon file",
+        generation: "unknown",
+        boxes: [{ id: "box-1", name: "Imported", mons: [{ slot: 1, label: filename, empty: false }] }],
+        notes: "Displayed as a single-slot import."
+      });
+    }
+
+    const meta = readMeta(id);
+    const overrideGame = meta?.override?.game || "";
+    const xyOverrideOffset = meta?.xy?.boxOffset; // number or undefined
+
+    const looksXY = overrideGame.startsWith("Pokémon X/Y") || isLikelyXYSav(buf);
+    if (looksXY) {
+      // Build view (includes occupancy + debug candidates if scanning)
+      const view = xyReadBoxes(buf, xyOverrideOffset);
+      const md   = xyReadMeta(buf);
+
+      // QOL: auto-persist best candidate once, so future loads are instant
+      if (xyOverrideOffset == null && view?.debug?.length) {
+        const best = view.debug[0]; // { offset, score, ... }
+        const m = readMeta(id);
+        m.xy = m.xy || {};
+        m.xy.boxOffset = best.offset;
+        writeMeta(id, m);
+        view.notes = (view.notes ? view.notes + " " : "") + `Auto-saved offset 0x${best.offset.toString(16)}.`;
+      }
+
+      return res.json({ ...view, trainer: md.trainer });
+    }
+
+    // Fallback: unknown format
+    return res.json({
+      game: "unknown",
+      generation: "unknown",
+      boxes: [],
+      notes: "No parser for this game yet. Set a manual override or upload a .pk* file."
+    });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ error: "Boxes error" });
+  }
+});
+
+/* ------------------- QOL: export one slot as .pk6 (XY) ------------------- */
+/* Example: GET /api/boxes/<id>/export?box=1&slot=12
+   - 204 No Content if the slot is empty
+   - application/octet-stream with 232 bytes if present
+*/
+app.get("/api/boxes/:id/export", (req, res) => {
   const id = req.params.id;
   const box = Number(req.query.box);   // 1..31
   const slot = Number(req.query.slot); // 1..30
@@ -164,10 +206,10 @@ app.get("/api/boxes/:id/export", async (req, res) => {
 
   const filePath = path.join(SAVES_DIR, id);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
   const buf = fs.readFileSync(filePath);
 
-  const { XY, findBoxRegion } = await import("./parsers/gen6_xy.js");
-  const { readMeta } = await import("./store/meta.js");
+  // Use saved offset if available, otherwise find/scan
   const meta = readMeta(id);
   const region = findBoxRegion(buf, meta?.xy?.boxOffset);
 
@@ -181,7 +223,8 @@ app.get("/api/boxes/:id/export", async (req, res) => {
   if (end > buf.length) return res.status(400).json({ error: "Computed slot out of range" });
 
   const blob = buf.subarray(start, end);
-  // Empty check
+
+  // Return 204 if empty
   let allZero = true;
   for (let i = 0; i < blob.length; i++) { if (blob[i] !== 0) { allZero = false; break; } }
   if (allZero) return res.status(204).end();
@@ -191,37 +234,6 @@ app.get("/api/boxes/:id/export", async (req, res) => {
   res.send(Buffer.from(blob));
 });
 
-// Attempt to auto-detect XY box offset in a save file
-app.post("/api/saves/:id/xy/auto-offset", async (req, res) => {
-  const id = req.params.id;
-  const filePath = path.join(SAVES_DIR, id);
-
-  if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: "Save not found" });
-  }
-
-  const buf = fs.readFileSync(filePath);
-
-  // Import your parser helpers
-  const { XY, findBoxRegion } = await import("./parsers/gen6_xy.js");
-  const { readMeta, writeMeta } = await import("./store/meta.js");
-
-  // Try to find the offset automatically
-  const region = findBoxRegion(buf);
-
-  if (!region || region.offset == null) {
-    return res.status(400).json({ error: "Unable to find XY box region automatically" });
-  }
-
-  // Save it to the meta store
-  const meta = readMeta(id) || {};
-  meta.xy = meta.xy || {};
-  meta.xy.boxOffset = region.offset;
-  writeMeta(id, meta);
-
-  res.json({ success: true, offset: region.offset });
-});
-
-
+/* ------------------------------- Start server ---------------------------- */
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`openhome-api listening on :${port}`));
