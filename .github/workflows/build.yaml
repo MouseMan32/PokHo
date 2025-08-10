@@ -47,5 +47,5 @@ jobs:
           file: ./web/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/<youruser>/openhome-web:latest
+          tags: ghcr.io/mouseman32/openhome-web:latest
 
