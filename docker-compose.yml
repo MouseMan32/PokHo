@@ -2,22 +2,20 @@
 version: "3.9"
 services:
   openhome-api:
-    build: ./api
-    container_name: openhome-api
+    image: ghcr.io/mouseman32/openhome-api:latest
     restart: unless-stopped
     volumes:
-      - saves:/data/saves
+      - /mnt/data/media/openhome/saves:/data/saves
     ports:
-      - "8095:8095"
+      - "8095:8095"   # your preferred port
+      - "8080:8095"   # compatibility: forwards host :8080 -> container :8095
+    environment:
+      - PORT=8095     # only if your image reads PORT; otherwise omit
 
   openhome-web:
-    build: ./web
-    container_name: openhome-web
+    image: ghcr.io/mouseman32/openhome-web:latest
     restart: unless-stopped
     ports:
       - "8085:80"
     depends_on:
       - openhome-api
-
-volumes:
-  saves:
