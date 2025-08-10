@@ -152,5 +152,45 @@ app.get("/api/boxes/:id", (req, res) => {
   return res.json({ game: "unknown", generation: "unknown", boxes: [], notes: "No parser for this game yet." });
 });
 
+// Export one XY slot as a .pk6 file (232 bytes). Empty slots return 204 No Content.
+app.get("/api/boxes/:id/export", async (req, res) => {
+  const id = req.params.id;
+  const box = Number(req.query.box);   // 1..31
+  const slot = Number(req.query.slot); // 1..30
+
+  if (!(box >= 1 && box <= 31 && slot >= 1 && slot <= 30)) {
+    return res.status(400).json({ error: "box must be 1..31 and slot 1..30" });
+  }
+
+  const filePath = path.join(SAVES_DIR, id);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+  const buf = fs.readFileSync(filePath);
+
+  const { XY, findBoxRegion } = await import("./parsers/gen6_xy.js");
+  const { readMeta } = await import("./store/meta.js");
+  const meta = readMeta(id);
+  const region = findBoxRegion(buf, meta?.xy?.boxOffset);
+
+  if (region.offset == null) {
+    return res.status(400).json({ error: "XY region not found; set offset via /api/saves/xy/region." });
+  }
+
+  const slotIndex = (box - 1) * XY.SLOTS_PER_BOX + (slot - 1);
+  const start = region.offset + slotIndex * XY.SLOT_SIZE;
+  const end = start + XY.SLOT_SIZE;
+  if (end > buf.length) return res.status(400).json({ error: "Computed slot out of range" });
+
+  const blob = buf.subarray(start, end);
+  // Empty check
+  let allZero = true;
+  for (let i = 0; i < blob.length; i++) { if (blob[i] !== 0) { allZero = false; break; } }
+  if (allZero) return res.status(204).end();
+
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader("Content-Disposition", `attachment; filename="xy-box${box}-slot${slot}.pk6"`);
+  res.send(Buffer.from(blob));
+});
+
+
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`openhome-api listening on :${port}`));
