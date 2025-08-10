@@ -191,6 +191,37 @@ app.get("/api/boxes/:id/export", async (req, res) => {
   res.send(Buffer.from(blob));
 });
 
+// Attempt to auto-detect XY box offset in a save file
+app.post("/api/saves/:id/xy/auto-offset", async (req, res) => {
+  const id = req.params.id;
+  const filePath = path.join(SAVES_DIR, id);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Save not found" });
+  }
+
+  const buf = fs.readFileSync(filePath);
+
+  // Import your parser helpers
+  const { XY, findBoxRegion } = await import("./parsers/gen6_xy.js");
+  const { readMeta, writeMeta } = await import("./store/meta.js");
+
+  // Try to find the offset automatically
+  const region = findBoxRegion(buf);
+
+  if (!region || region.offset == null) {
+    return res.status(400).json({ error: "Unable to find XY box region automatically" });
+  }
+
+  // Save it to the meta store
+  const meta = readMeta(id) || {};
+  meta.xy = meta.xy || {};
+  meta.xy.boxOffset = region.offset;
+  writeMeta(id, meta);
+
+  res.json({ success: true, offset: region.offset });
+});
+
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => console.log(`openhome-api listening on :${port}`));
