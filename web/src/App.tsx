@@ -273,36 +273,42 @@ export default function App() {
 
             <div className="detail-card">
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Selection</div>
-              {!selectedSlot ? (
-                <div className="small">Click a slot in the grid.</div>
-              ) : (
-                <div className="kv">
-                  <label>Box</label><div>{selectedSlot.box}</div>
-                  <label>Slot</label><div>{selectedSlot.slot}</div>
-                  <label>Status</label>
-                  <div>
-                    {(() => {
-                      const b = boxesBySave[saveId!]?.boxes?.[selectedSlot.box - 1];
-                      const m = b?.mons?.[selectedSlot.slot - 1];
-                      return m && !m.empty ? "Occupied" : "Empty";
-                    })()}
-                  </div>
-                  {(() => {
-                    const b = boxesBySave[saveId!]?.boxes?.[selectedSlot.box - 1];
-                    const m = b?.mons?.[selectedSlot.slot - 1];
-                    if (!m || m.empty) return null;
-                    return (
-                      <>
-                        <label>Preview</label><div><code>{m.preview}</code></div>
-                        <label>Hash (SHA-1)</label><div className="small"><code>{m.hash}</code></div>
-                        <label>Download</label>
-                        <div>
-                          <button
-                            className="btn"
-                            onClick={() => {
-                              const url = `/api/boxes/${encodeURIComponent(saveId!)}/export?box=${selectedSlot.box}&slot=${selectedSlot.slot}`;
-                              window.open(url, "_blank");
-                            }}
+{!selectedSlot ? (
+  <div className="small">Click a slot in the grid.</div>
+) : (
+  <div className="kv">
+    <label>Box</label><div>{selectedSlot.box}</div>
+    <label>Slot</label><div>{selectedSlot.slot}</div>
+    {(() => {
+      const b = boxesBySave[saveId!]?.boxes?.[selectedSlot.box - 1];
+      const m = b?.mons?.[selectedSlot.slot - 1];
+      if (!m) return <></>;
+      if (m.empty) {
+        return (
+          <>
+            <label>Status</label><div>Empty</div>
+          </>
+        );
+      }
+      return (
+        <>
+          <label>Status</label><div>Occupied</div>
+          <label>Species</label><div>#{m.species ?? "?"}</div>
+          <label>Nature</label><div>{m.nature ?? "?"}</div>
+          <label>Shiny</label><div>{m.shiny ? "★ Yes" : "No"}</div>
+          <label>PID</label><div className="small"><code>{m.pid}</code></div>
+          <label>TID/SID</label><div className="small"><code>{m.tid}/{m.sid}</code></div>
+          <label>Checksum</label><div>{m.checksumOK === true ? "OK" : m.checksumOK === false ? "Bad" : "—"}</div>
+          <label>Preview</label><div><code>{m.preview}</code></div>
+          <label>Hash</label><div className="small"><code>{m.hash}</code></div>
+          <label>Download</label>
+          <div>
+            <button
+              className="btn"
+              onClick={() => {
+                const url = `/api/boxes/${encodeURIComponent(saveId!)}/export?box=${selectedSlot.box}&slot=${selectedSlot.slot}`;
+                window.open(url, "_blank");
+              }}
                           >
                             Download .pk6
                           </button>
