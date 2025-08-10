@@ -126,3 +126,14 @@ body { margin:0; background: linear-gradient(180deg, #0b1220, #0a1020 30%, #0b12
 .kv{ display:grid; grid-template-columns: 120px 1fr; gap:6px; font-size:14px; }
 .kv label{ color:var(--muted); }
 .small{ font-size:12px; color:var(--muted); }
+
+.slot-sprite{
+  position:absolute;
+  top:50%;
+  left:50%;
+  width:48px;
+  height:48px;
+  transform: translate(-50%, -50%);
+  image-rendering: pixelated; /* looks nice for classic sprites */
+  pointer-events: none;
+}
