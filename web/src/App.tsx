@@ -167,5 +167,9 @@ async function fetchBoxes(id: string) {
                                   key={i}
                                   title={mon.label || (mon.empty ? "Empty" : "Occupied")}
                                   style={{
-                                    width: 32, height: 32,
-                                    border: "1px sol
+                                    width: 32,
+                                    height: 32,
+                                    border: "1px solid #bbb",
+                                    background: mon.empty ? "#f1f1f1" : "#b6f5b6",
+                                  }}
+
