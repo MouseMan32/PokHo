@@ -156,6 +156,76 @@ export function readBoxes(buf, overrideOffset) {
     };
   }
 
+// Heuristic: score an XY box-region offset by how many plausible PK6 slots we see.
+export function scoreXYRegion(buf, offset) {
+  const BOXES = XY.BOX_COUNT ?? 31;
+  const SLOTS = XY.SLOTS_PER_BOX ?? 30;
+  const SIZE  = XY.SLOT_SIZE; // e.g., 0xE8 (232)
+
+  const totalSlots = BOXES * SLOTS;
+  let ok = 0, zeros = 0, bad = 0, shinyCount = 0, plausibleSpecies = 0;
+
+  for (let i = 0; i < totalSlots; i++) {
+    const start = offset + i * SIZE;
+    const end = start + SIZE;
+    if (end > buf.length) { bad += (totalSlots - i); break; }
+
+    const blob = buf.subarray(start, end);
+
+    // quick zero check
+    let allZero = true;
+    for (let j = 0; j < blob.length; j++) { if (blob[j] !== 0) { allZero = false; break; } }
+    if (allZero) { zeros++; continue; }
+
+    // use your existing minimal decode to sanity-check
+    let decoded = null;
+    try {
+      decoded = XY.decodeSlot ? XY.decodeSlot(blob) : null;
+    } catch { decoded = null; }
+
+    if (decoded && decoded.checksumOK === true) {
+      ok++;
+      if (decoded.shiny) shinyCount++;
+      if (typeof decoded.species === "number" && decoded.species >= 1 && decoded.species <= 721) {
+        plausibleSpecies++;
+      }
+    } else {
+      bad++;
+    }
+  }
+
+  // Weighted score: reward valid checksums & plausible species; penalize bads
+  const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
+  return { score, ok, zeros, bad, plausibleSpecies, shinyCount };
+}
+
+// Brute-force around a hint; also test ±0x200 variants for size skew
+export function xyAutoPickOffset(buf, hint) {
+  const candidates = new Map(); // offset -> result
+  const pushes = (off, reason) => {
+    if (off < 0 || off >= buf.length) return;
+    if (candidates.has(off)) return;
+    const r = scoreXYRegion(buf, off);
+    candidates.set(off, { offset: off, reason, ...r });
+  };
+
+  const baseHints = [hint, hint + 0x200, hint - 0x200];
+
+  for (const h of baseHints) {
+    // stride 0x10 across ±0x4000
+    for (let d = -0x4000; d <= 0x4000; d += 0x10) {
+      pushes(h + d, (h === hint ? "hint" : (h > hint ? "+0x200" : "-0x200")));
+    }
+  }
+
+  // Sort by score desc, then by fewer bads
+  const top = Array.from(candidates.values())
+    .sort((a, b) => b.score - a.score || a.bad - b.bad);
+
+  return { best: top[0], top };
+}
+
+
   const boxes = [];
   let ptr = region.offset;
 
