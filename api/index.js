@@ -72,6 +72,42 @@ app.post("/api/saves/override", (req, res) => {
   res.json({ ok: true, override: meta.override });
 });
 
+/* -------- Auto-fix XY offset: scan a window, pick best, persist ---------- */
+app.post("/api/saves/xy/autofix", (req, res) => {
+  const { id, hint } = req.body || {};
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const filePath = path.join(SAVES_DIR, id);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
+  const buf = fs.readFileSync(filePath);
+  if (!isLikelyXYSav(buf)) return res.status(400).json({ error: "Save does not look like XY" });
+
+  // Use provided hint or fall back to the one in meta, else 0x22600 as a last resort
+  const meta = readMeta(id) || {};
+  const startHint = Number(
+    hint ?? meta?.xy?.boxOffset ?? 0x22600 // your closest candidate
+  );
+
+  // scan ±0x4000 around the hint in 0x10 steps; also test ±0x200 (size variant)
+  const { best, top } = xyAutoPickOffset(buf, startHint);
+
+  if (!best) return res.status(404).json({ error: "No plausible XY region found" });
+
+  // Persist and return top candidates to the UI
+  const m = readMeta(id) || {};
+  m.xy = m.xy || {};
+  m.xy.boxOffset = best.offset;
+  writeMeta(id, m);
+
+  res.json({
+    ok: true,
+    chosen: { offset: best.offset, score: best.score, reason: best.reason },
+    top: top.slice(0, 8), // preview a few
+  });
+});
+
+
 /* ------------------------------ Validate a save -------------------------- */
 app.post("/api/saves/validate", (req, res) => {
   try {
