@@ -24,7 +24,7 @@ type Box = { id: string; name: string; mons: Mon[] };
 type BoxesResponse = { game: string; generation: string | number; notes?: string; trainer?: any; boxes: Box[] };
 
 /** API base + helper */
-const API_BASE = (import.meta as any).env?.VITE_API_URL ?? "http://localhost:8095";
+const API_BASE = (import.meta as any).env?.VITE_API_URL ?? "http://192.168.1.175:8095";
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`${API_BASE}${path}`, init);
   if (!r.ok) throw new Error(await r.text().catch(() => r.statusText));
