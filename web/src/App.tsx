@@ -366,7 +366,8 @@ export default function App() {
                     return (
                       <>
                         <label>Status</label><div>Occupied</div>
-                        <label>Species</label><div>#{m.species ?? "?"}</div>
+                        <label>Species</label>
+                        <div>{m.species ? (nameCache[m.species] ?? `#${m.species}`) : "?"}</div>
                         <label>Nature</label><div>{m.nature ?? "?"}</div>
                         <label>Shiny</label><div>{m.shiny ? "★ Yes" : "No"}</div>
                         <label>PID</label><div className="small"><code>{m.pid}</code></div>
