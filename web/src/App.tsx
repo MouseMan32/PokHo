@@ -1,241 +1,253 @@
-// web/src/App.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import "./home.css";
 
+/** Types */
 type SaveItem = { id: string; name: string };
-type Detection = {
-  kind: string;
-  game: string;
-  generation: string | number;
-  confidence: number;
-  notes?: string;
-};
-type Validation = {
-  filename: string;
-  size: number;
-  sha256: string;
-  detection: Detection;
-};
-type BoxesResponse = {
-  game: string;
-  generation: string | number;
-  notes?: string;
-  trainer?: any;
-  boxes: { id: string; name: string; mons: Array<{ slot: number; empty?: boolean; label?: string }> }[];
-};
+type Detection = { kind: string; game: string; generation: string | number; confidence: number; notes?: string };
+type Validation = { filename: string; size: number; sha256: string; detection: Detection };
+type Box = { id: string; name: string; mons: Array<{ slot: number; empty?: boolean; label?: string }> };
+type BoxesResponse = { game: string; generation: string | number; notes?: string; trainer?: any; boxes: Box[] };
+
+/** API helpers */
+async function api<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+  const r = await fetch(input, init);
+  if (!r.ok) throw new Error(await r.text().catch(() => r.statusText));
+  return r.json();
+}
 
 export default function App() {
+  /** app state */
   const [saves, setSaves] = useState<SaveItem[]>([]);
   const [validations, setValidations] = useState<Record<string, Validation>>({});
-  const [boxes, setBoxes] = useState<Record<string, BoxesResponse>>({});
+  const [boxesBySave, setBoxesBySave] = useState<Record<string, BoxesResponse>>({});
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  /** selection */
+  const [saveId, setSaveId] = useState<string | null>(null);
+  const [boxIndex, setBoxIndex] = useState(0);
+  const [selectedSlot, setSelectedSlot] = useState<{ box: number; slot: number } | null>(null);
+
+  /** derived */
+  const selectedBoxes = saveId ? boxesBySave[saveId]?.boxes || [] : [];
+  const currentBox = selectedBoxes[boxIndex];
+
+  /** init */
+  useEffect(() => { refreshSaves(); }, []);
 
   async function refreshSaves() {
     try {
-      setError(null);
-      const r = await fetch("/api/saves");
-      if (!r.ok) throw new Error("Failed to load saves");
-      const data = (await r.json()) as SaveItem[];
-      setSaves(data);
-    } catch (e: any) {
-      setError(e?.message || "Failed to reach API. Is openhome-api running?");
-    }
+      setErr(null);
+      const list = await api<SaveItem[]>("/api/saves");
+      setSaves(list);
+      if (!saveId && list.length) setSaveId(list[0].id);
+    } catch (e: any) { setErr(e?.message || "Failed to reach API"); }
   }
 
-  useEffect(() => {
-    refreshSaves();
-  }, []);
-
-  async function uploadChanged(e: React.ChangeEvent<HTMLInputElement>) {
+  /** actions */
+  async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
     if (!e.target.files?.length) return;
-    setBusy(true);
-    setError(null);
+    setBusy(true); setErr(null);
     const form = new FormData();
-    Array.from(e.target.files).forEach((f) => form.append("files", f));
+    Array.from(e.target.files).forEach(f => form.append("files", f));
     try {
-      const r = await fetch("/api/saves", { method: "POST", body: form });
-      if (!r.ok) throw new Error("Upload failed");
-      const { uploaded } = await r.json();
+      const { uploaded } = await api<{ uploaded: SaveItem[] }>("/api/saves", { method: "POST", body: form });
       await refreshSaves();
-      // auto-validate new uploads
-      for (const f of uploaded) {
-        await validateById(f.id);
-      }
-    } catch (e: any) {
-      setError(e?.message || "Upload error");
-    } finally {
-      setBusy(false);
-      e.currentTarget.value = "";
-    }
+      // auto-select first uploaded
+      if (uploaded?.[0]?.id) setSaveId(uploaded[0].id);
+      // auto-validate
+      for (const f of uploaded) await validateSave(f.id);
+    } catch (e:any) { setErr(e?.message || "Upload error"); }
+    finally { setBusy(false); e.currentTarget.value = ""; }
   }
 
-  async function validateById(id: string) {
-    const r = await fetch("/api/saves/validate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
+  async function validateSave(id: string) {
+    const v = await api<Validation>("/api/saves/validate", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id })
     });
-    if (!r.ok) throw new Error("Validation failed");
-    const v = (await r.json()) as Validation;
-    setValidations((prev) => ({ ...prev, [id]: v }));
+    setValidations(prev => ({ ...prev, [id]: v }));
   }
 
   async function setOverride(id: string, game: string, generation = "6") {
-    const r = await fetch("/api/saves/override", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, game, generation }),
+    await api("/api/saves/override", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, game, generation })
     });
-    if (!r.ok) throw new Error("Failed to set override");
-    await validateById(id);
+    await validateSave(id);
   }
 
-  async function fetchBoxes(id: string) {
-    const r = await fetch(`/api/boxes/${id}`);
-    if (!r.ok) throw new Error("Boxes fetch failed");
-    const data = (await r.json()) as BoxesResponse;
-    setBoxes((prev) => ({ ...prev, [id]: data }));
+  async function loadBoxes(id: string) {
+    const data = await api<BoxesResponse>(`/api/boxes/${id}`);
+    setBoxesBySave(prev => ({ ...prev, [id]: data }));
+    // reset selection on new boxes
+    setBoxIndex(0);
+    setSelectedSlot(null);
   }
 
   async function scanXY(id: string) {
-    const r = await fetch(`/api/debug/xy/${encodeURIComponent(id)}/scan`);
-    const j = await r.json();
-    if (j.error) {
-      alert(j.error);
-      return;
-    }
-    const lines = (j.candidates || []).map(
-      (c: any) => `offset=0x${c.offset.toString(16)}  score=${(c.score * 100).toFixed(1)}%`
-    );
-    alert(lines.length ? `Top candidates:\n${lines.join("\n")}` : "No candidates found");
+    try {
+      const j = await api<any>(`/api/debug/xy/${encodeURIComponent(id)}/scan`);
+      const lines = (j.candidates || []).map((c:any)=>`offset=0x${c.offset.toString(16)}  score=${(c.score*100).toFixed(1)}%`);
+      alert(lines.length ? `Top candidates:\n${lines.join("\n")}` : "No candidates found");
+    } catch (e:any) { alert(e?.message || "Scan failed"); }
   }
 
   async function setXYOffset(id: string) {
     const off = prompt("Enter XY region offset (hex like 0x1A000 or decimal):");
     if (!off) return;
-    const r = await fetch(`/api/saves/xy/region`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, offset: off }),
+    await api(`/api/saves/xy/region`, {
+      method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify({ id, offset: off })
     });
-    if (!r.ok) {
-      alert("Failed to set offset");
-      return;
-    }
-    await fetchBoxes(id);
-    alert("Offset saved. Reopen boxes to apply.");
+    await loadBoxes(id);
+    alert("Offset saved.");
   }
 
+  /** render */
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: 24 }}>
-      <h1 style={{ marginBottom: 8 }}>OpenHome Web</h1>
-      <p style={{ marginTop: 0, color: "#555" }}>
-        Upload a save, then click <b>Validate</b> and <b>View Boxes</b>. For Pokémon X/Y (Citra), use{" "}
-        <b>Scan XY Region</b> and <b>Set XY Offset</b> if needed.
-      </p>
-
-      <div style={{ margin: "12px 0" }}>
-        <label
-          style={{
-            display: "inline-block",
-            padding: "8px 12px",
-            border: "1px solid #ddd",
-            borderRadius: 8,
-            cursor: "pointer",
-          }}
-        >
-          {busy ? "Uploading…" : "Upload save(s)"}
-          <input type="file" multiple onChange={uploadChanged} style={{ display: "none" }} disabled={busy} />
-        </label>
-        <button onClick={refreshSaves} style={{ marginLeft: 8 }}>
-          Refresh
-        </button>
-        {error && <span style={{ marginLeft: 12, color: "crimson" }}>{error}</span>}
+    <div className="app-shell">
+      {/* Topbar */}
+      <div className="topbar">
+        <div className="brand">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#34d399" strokeWidth="2"/><circle cx="12" cy="12" r="3" fill="#34d399"/></svg>
+          <div>OpenHome Web</div>
+          <span className="badge">Beta</span>
+        </div>
+        <div className="tabs">
+          <div className="tab active">Home</div>
+          <div className="tab">Boxes</div>
+          <div className="tab">Search</div>
+          <div className="tab">Settings</div>
+        </div>
       </div>
 
-      {!saves.length ? (
-        <div style={{ color: "#777" }}>
-          No saves yet. Upload a <code>main</code> file (Citra/JKSV) or a <code>.pk*</code> file.
+      {/* Sidebar */}
+      <div className="sidebar">
+        <div className="section-title">Your Saves</div>
+        <div className="dropzone">
+          <label style={{cursor:"pointer"}}>
+            <input type="file" multiple onChange={onUpload} style={{ display:"none" }} disabled={busy}/>
+            {busy ? "Uploading…" : "Click to upload saves"}
+          </label>
         </div>
-      ) : (
-        <div style={{ maxWidth: 980 }}>
-          {saves.map((s) => {
-            const v = validations[s.id];
-            const b = boxes[s.id];
-            return (
-              <div key={s.id} style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+
+        {!saves.length && <div className="small" style={{marginTop:10}}>No saves yet. Upload a <code>main</code> (Citra/JKSV) or <code>.pk*</code>.</div>}
+
+        {saves.map(s => {
+          const v = validations[s.id];
+          const selected = s.id === saveId;
+          return (
+            <div key={s.id} className="save-card" style={{outline: selected ? "2px solid rgba(96,165,250,.35)" : "none"}}>
+              <div className="save-name">{s.name}</div>
+              <div className="small">{s.id}</div>
+              <div className="save-actions">
+                <button className="btn" onClick={() => { setSaveId(s.id); validateSave(s.id); }}>Validate</button>
+                <button className="btn primary" onClick={() => { setSaveId(s.id); loadBoxes(s.id); }}>Open Boxes</button>
+                <button className="btn" onClick={() => scanXY(s.id)}>Scan XY</button>
+                <button className="btn warning" onClick={() => setXYOffset(s.id)}>Set XY Offset</button>
+              </div>
+              {v && (
+                <div className="small" style={{marginTop:8}}>
+                  Detected: <b>{v.detection.game}</b> (Gen {String(v.detection.generation)}) — conf {Math.round((v.detection.confidence ?? 0)*100)}%
+                  {v.detection.notes && <div>{v.detection.notes}</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {err && <div className="small" style={{color:"#fca5a5", marginTop:8}}>{err}</div>}
+      </div>
+
+      {/* Main (Boxes) */}
+      <div className="main">
+        {saveId ? (
+          <>
+            <div className="box-header">
+              <div className="box-switcher">
+                <button className="navbtn" onClick={() => setBoxIndex(i => Math.max(0, i-1))}>‹</button>
+                <div className="pill">Save: <strong style={{marginLeft:6}}>{saves.find(s=>s.id===saveId)?.name || "—"}</strong></div>
+                <div className="pill">Box: <strong style={{marginLeft:6}}>{(boxIndex+1).toString().padStart(2,"0")}</strong></div>
+                <button className="navbtn" onClick={() => setBoxIndex(i => Math.min(Math.max(0, selectedBoxes.length-1), i+1))}>›</button>
+              </div>
+              <div style={{display:"flex", gap:8}}>
+                <button className="btn" onClick={()=> saveId && loadBoxes(saveId)}>Reload Boxes</button>
+              </div>
+            </div>
+
+            {!selectedBoxes.length ? (
+              <div className="small">Open a save and click <b>Open Boxes</b> to load the grid.</div>
+            ) : !currentBox ? (
+              <div className="small">No such box index. Use the arrows to navigate.</div>
+            ) : (
+              <div className="grid">
+                {currentBox.mons.map((mon, idx) => {
+                  const occupied = !mon.empty;
+                  return (
+                    <div
+                      key={idx}
+                      className={`slot ${occupied ? "occupied" : "empty"}`}
+                      onClick={() => setSelectedSlot({ box: boxIndex+1, slot: mon.slot })}
+                      title={occupied ? "Occupied" : "Empty"}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="small">Select a save on the left to begin.</div>
+        )}
+      </div>
+
+      {/* Details */}
+      <div className="details">
+        <div className="section-title">Details</div>
+        {!saveId ? (
+          <div className="detail-card small">No save selected.</div>
+        ) : (
+          <>
+            <div className="detail-card">
+              <div style={{fontWeight:600, marginBottom:6}}>Save</div>
+              <div className="kv">
+                <label>ID</label><div>{saveId}</div>
+                <label>Name</label><div>{saves.find(s=>s.id===saveId)?.name}</div>
+                <label>Game</label><div>{boxesBySave[saveId]?.game || validations[saveId]?.detection?.game || "—"}</div>
+                <label>Generation</label><div>{String(boxesBySave[saveId]?.generation ?? validations[saveId]?.detection?.generation ?? "—")}</div>
+              </div>
+              {boxesBySave[saveId]?.notes && <div className="small" style={{marginTop:8}}>{boxesBySave[saveId]?.notes}</div>}
+            </div>
+
+            <div className="detail-card">
+              <div style={{fontWeight:600, marginBottom:6}}>Selection</div>
+              {!selectedSlot ? (
+                <div className="small">Click a slot in the grid.</div>
+              ) : (
+                <div className="kv">
+                  <label>Box</label><div>{selectedSlot.box}</div>
+                  <label>Slot</label><div>{selectedSlot.slot}</div>
+                  <label>Status</label>
                   <div>
-                    <div style={{ fontWeight: 600 }}>{s.name}</div>
-                    <div style={{ fontSize: 12, color: "#666" }}>{s.id}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    <button onClick={() => validateById(s.id)}>Validate</button>
-                    <button onClick={() => fetchBoxes(s.id)}>View Boxes</button>
-                    <button onClick={() => scanXY(s.id)}>Scan XY Region</button>
-                    <button onClick={() => setXYOffset(s.id)}>Set XY Offset</button>
+                    {(() => {
+                      const b = boxesBySave[saveId]?.boxes?.[selectedSlot.box-1];
+                      const m = b?.mons?.[selectedSlot.slot-1];
+                      return m && !m.empty ? "Occupied" : "Empty";
+                    })()}
                   </div>
                 </div>
+              )}
+            </div>
 
-                {v && (
-                  <div style={{ marginTop: 8, fontSize: 14, color: "#333" }}>
-                    <div>
-                      Detected: {v.detection.kind} → {v.detection.game} (gen {String(v.detection.generation)}), confidence{" "}
-                      {Math.round((v.detection.confidence ?? 0) * 100)}%
-                    </div>
-                    {v.detection.notes && <div style={{ fontStyle: "italic" }}>{v.detection.notes}</div>}
-                    {v.detection.game === "unknown" && (
-                      <div style={{ marginTop: 6 }}>
-                        <span>Set Game: </span>
-                        <button onClick={() => setOverride(s.id, "Pokémon X/Y (Citra)", "6")}>Pokémon X/Y (Citra)</button>
-                        {/* Add more quick-picks later */}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {b && (
-                  <div style={{ marginTop: 10 }}>
-                    <div style={{ fontWeight: 600 }}>
-                      {b.game} (Gen {String(b.generation)})
-                      {b.trainer?.ot && (
-                        <span style={{ marginLeft: 8, fontWeight: 400, color: "#666" }}>OT: {b.trainer.ot}</span>
-                      )}
-                    </div>
-                    {b.notes && <div style={{ fontStyle: "italic" }}>{b.notes}</div>}
-                    {b.boxes?.length ? (
-                      <div style={{ marginTop: 8 }}>
-                        {b.boxes.map((box) => (
-                          <div key={box.id} style={{ marginBottom: 8 }}>
-                            <div style={{ fontWeight: 500, marginBottom: 4 }}>{box.name}</div>
-                            {/* 30 slots per row looks cramped; show 10 columns × 3 rows per box */}
-                            <div style={{ display: "grid", gridTemplateColumns: "repeat(10, 32px)", gap: 4 }}>
-                              {box.mons.map((mon, i) => (
-                                <div
-                                  key={i}
-                                  title={mon.label || (mon.empty ? "Empty" : "Occupied")}
-                                  style={{
-                                    width: 32,
-                                    height: 32,
-                                    border: "1px solid #bbb",
-                                    background: mon.empty ? "#f1f1f1" : "#b6f5b6",
-                                  }}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ color: "#777" }}>No boxes to show yet.</div>
-                    )}
-                  </div>
-                )}
+            <div className="detail-card">
+              <div style={{fontWeight:600, marginBottom:6}}>Actions</div>
+              <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+                <button className="btn" onClick={() => saveId && validateSave(saveId)}>Re-Validate</button>
+                <button className="btn" onClick={() => saveId && scanXY(saveId)}>Scan XY Region</button>
+                <button className="btn warning" onClick={() => saveId && setXYOffset(saveId)}>Set XY Offset</button>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div className="small" style={{marginTop:8}}>Download/export per-slot will appear here in the next step.</div>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
