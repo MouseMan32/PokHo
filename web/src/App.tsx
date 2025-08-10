@@ -66,11 +66,13 @@ export default function App() {
     await validateById(id);
   }
 
-  async function fetchBoxes(id: string) {
-    const r = await fetch(`/api/boxes/${id}`);
-    if (!r.ok) throw new Error("Boxes fetch failed");
-    setBoxes(prev => ({ ...prev, [id]: await r.json() }));
-  }
+async function fetchBoxes(id: string) {
+  const r = await fetch(`/api/boxes/${id}`);
+  if (!r.ok) throw new Error("Boxes fetch failed");
+  const data = await r.json();              // ✅ await here
+  setBoxes(prev => ({ ...prev, [id]: data })); 
+}
+
 
   async function scanXY(id: string) {
     const r = await fetch(`/api/debug/xy/${encodeURIComponent(id)}/scan`);
