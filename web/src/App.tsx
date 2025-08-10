@@ -2,6 +2,15 @@
 import React, { useEffect, useState } from "react";
 import "./home.css";
 
+/** Sprites **/
+function spriteUrl(species?: number | null, shiny?: boolean) {
+  if (!species) return null;
+  // PokeAPI sprite CDN (simple & reliable)
+  return shiny
+    ? `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/shiny/${species}.png`
+    : `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${species}.png`;
+}
+
 /** Types */
 type SaveItem = { id: string; name: string };
 type Detection = { kind: string; game: string; generation: string | number; confidence: number; notes?: string };
@@ -255,15 +264,26 @@ export default function App() {
                       onClick={() => setSelectedSlot({ box: boxIndex + 1, slot: mon.slot })}
                       onDoubleClick={() => {
                         if (saveId && occupied) {
-                          const url = `${API_BASE}/api/boxes/${encodeURIComponent(saveId)}/export?box=${boxIndex + 1}&slot=${mon.slot}`;
+                          const url = `/api/boxes/${encodeURIComponent(saveId)}/export?box=${boxIndex + 1}&slot=${mon.slot}`;
                           window.open(url, "_blank");
                         }
                       }}
                       title={occupied ? "Double-click to download .pk6" : "Empty"}
-                    />
+                      style={{ position: "relative" }}
+                    >
+                      {occupied && mon.species && (
+                        <img
+                          src={spriteUrl(mon.species, mon.shiny)!}
+                          alt={`#${mon.species}`}
+                          className="slot-sprite"
+                          draggable={false}
+                        />
+                      )}
+                    </div>
                   );
-                })}
-              </div>
+              })}
+        </div>
+
             )}
           </>
         ) : (
