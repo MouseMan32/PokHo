@@ -22,7 +22,7 @@ const app = express();
 // CORS: allow your web UI on 8085 (or reflect any origin if preferred)
 app.use(
   cors({
-    origin: ["http://localhost:8085", "http://127.0.0.1:8085"],
+    origin: ["http://localhost:8085", "http://127.0.0.1:8085", "http://192.168.1.175:8085"],
     credentials: false,
   })
 );
