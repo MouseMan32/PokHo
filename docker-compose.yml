@@ -6,6 +6,7 @@ services:
     restart: unless-stopped
     volumes:
       - /mnt/data/media/openhome/saves:/data/saves
+      - /mnt/data/media/openhome/meta:/data/meta
     ports:
       - "8095:8095"   # your preferred port
       - "8080:8095"   # compatibility: forwards host :8080 -> container :8095
