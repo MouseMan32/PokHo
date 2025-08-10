@@ -1,6 +1,7 @@
 // web/src/App.tsx
 import React, { useEffect, useState } from "react";
 import "./home.css";
+import { fetchSpeciesName, getCachedName } from "./speciesNames";
 
 /** Sprites **/
 function spriteUrl(species?: number | null, shiny?: boolean) {
@@ -56,6 +57,39 @@ export default function App() {
   /** derived */
   const selectedBoxes = saveId ? boxesBySave[saveId]?.boxes || [] : [];
   const currentBox = selectedBoxes[boxIndex];
+
+  const [nameCache, setNameCache] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    // Prefetch names for all species visible in the current box
+    const species = new Set<number>();
+    currentBox?.mons.forEach((m) => {
+      if (!m.empty && m.species) species.add(m.species);
+    });
+
+    if (species.size === 0) return;
+
+    (async () => {
+      const updates: Record<number, string> = {};
+      // seed from localStorage if present
+      species.forEach((id) => {
+        const cached = getCachedName(id);
+        if (cached) updates[id] = cached;
+      });
+      // fetch any missing
+      await Promise.all(
+        Array.from(species)
+          .filter((id) => !updates[id])
+          .map(async (id) => {
+            const name = await fetchSpeciesName(id);
+            updates[id] = name;
+          })
+      );
+      if (Object.keys(updates).length) {
+        setNameCache((prev) => ({ ...prev, ...updates }));
+      }
+    })();
+  }, [currentBox]);
 
   /** init */
   useEffect(() => {
