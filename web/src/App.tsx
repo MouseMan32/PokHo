@@ -6,13 +6,27 @@ import "./home.css";
 type SaveItem = { id: string; name: string };
 type Detection = { kind: string; game: string; generation: string | number; confidence: number; notes?: string };
 type Validation = { filename: string; size: number; sha256: string; detection: Detection };
-type Mon = { slot: number; empty?: boolean; label?: string; preview?: string; hash?: string };
+type Mon = {
+  slot: number;
+  empty?: boolean;
+  label?: string;
+  preview?: string;
+  hash?: string;
+  species?: number | null;
+  nature?: number | null;
+  shiny?: boolean;
+  pid?: number | null;
+  tid?: number | null;
+  sid?: number | null;
+  checksumOK?: boolean | null;
+};
 type Box = { id: string; name: string; mons: Mon[] };
 type BoxesResponse = { game: string; generation: string | number; notes?: string; trainer?: any; boxes: Box[] };
 
-/** API helper */
-async function api<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const r = await fetch(input, init);
+/** API base + helper */
+const API_BASE = (import.meta as any).env?.VITE_API_URL ?? "http://localhost:8080";
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${API_BASE}${path}`, init);
   if (!r.ok) throw new Error(await r.text().catch(() => r.statusText));
   return r.json();
 }
@@ -63,8 +77,13 @@ export default function App() {
         body: form,
       });
       await refreshSaves();
-      if (uploaded?.[0]?.id) setSaveId(uploaded[0].id);
-      for (const f of uploaded) await validateSave(f.id);
+      if (uploaded?.[0]?.id) {
+        setSaveId(uploaded[0].id);
+        await validateSave(uploaded[0].id);
+        await loadBoxes(uploaded[0].id); // auto-open boxes after upload
+      }
+      // still validate any extras
+      for (const f of uploaded.slice(1)) await validateSave(f.id);
     } catch (e: any) {
       setErr(e?.message || "Upload error");
     } finally {
@@ -236,7 +255,7 @@ export default function App() {
                       onClick={() => setSelectedSlot({ box: boxIndex + 1, slot: mon.slot })}
                       onDoubleClick={() => {
                         if (saveId && occupied) {
-                          const url = `/api/boxes/${encodeURIComponent(saveId)}/export?box=${boxIndex + 1}&slot=${mon.slot}`;
+                          const url = `${API_BASE}/api/boxes/${encodeURIComponent(saveId)}/export?box=${boxIndex + 1}&slot=${mon.slot}`;
                           window.open(url, "_blank");
                         }
                       }}
@@ -273,42 +292,42 @@ export default function App() {
 
             <div className="detail-card">
               <div style={{ fontWeight: 600, marginBottom: 6 }}>Selection</div>
-{!selectedSlot ? (
-  <div className="small">Click a slot in the grid.</div>
-) : (
-  <div className="kv">
-    <label>Box</label><div>{selectedSlot.box}</div>
-    <label>Slot</label><div>{selectedSlot.slot}</div>
-    {(() => {
-      const b = boxesBySave[saveId!]?.boxes?.[selectedSlot.box - 1];
-      const m = b?.mons?.[selectedSlot.slot - 1];
-      if (!m) return <></>;
-      if (m.empty) {
-        return (
-          <>
-            <label>Status</label><div>Empty</div>
-          </>
-        );
-      }
-      return (
-        <>
-          <label>Status</label><div>Occupied</div>
-          <label>Species</label><div>#{m.species ?? "?"}</div>
-          <label>Nature</label><div>{m.nature ?? "?"}</div>
-          <label>Shiny</label><div>{m.shiny ? "★ Yes" : "No"}</div>
-          <label>PID</label><div className="small"><code>{m.pid}</code></div>
-          <label>TID/SID</label><div className="small"><code>{m.tid}/{m.sid}</code></div>
-          <label>Checksum</label><div>{m.checksumOK === true ? "OK" : m.checksumOK === false ? "Bad" : "—"}</div>
-          <label>Preview</label><div><code>{m.preview}</code></div>
-          <label>Hash</label><div className="small"><code>{m.hash}</code></div>
-          <label>Download</label>
-          <div>
-            <button
-              className="btn"
-              onClick={() => {
-                const url = `/api/boxes/${encodeURIComponent(saveId!)}/export?box=${selectedSlot.box}&slot=${selectedSlot.slot}`;
-                window.open(url, "_blank");
-              }}
+              {!selectedSlot ? (
+                <div className="small">Click a slot in the grid.</div>
+              ) : (
+                <div className="kv">
+                  <label>Box</label><div>{selectedSlot.box}</div>
+                  <label>Slot</label><div>{selectedSlot.slot}</div>
+                  {(() => {
+                    const b = boxesBySave[saveId!]?.boxes?.[selectedSlot.box - 1];
+                    const m = b?.mons?.[selectedSlot.slot - 1];
+                    if (!m) return <></>;
+                    if (m.empty) {
+                      return (
+                        <>
+                          <label>Status</label><div>Empty</div>
+                        </>
+                      );
+                    }
+                    return (
+                      <>
+                        <label>Status</label><div>Occupied</div>
+                        <label>Species</label><div>#{m.species ?? "?"}</div>
+                        <label>Nature</label><div>{m.nature ?? "?"}</div>
+                        <label>Shiny</label><div>{m.shiny ? "★ Yes" : "No"}</div>
+                        <label>PID</label><div className="small"><code>{m.pid}</code></div>
+                        <label>TID/SID</label><div className="small"><code>{m.tid}/{m.sid}</code></div>
+                        <label>Checksum</label><div>{m.checksumOK === true ? "OK" : m.checksumOK === false ? "Bad" : "—"}</div>
+                        <label>Preview</label><div><code>{m.preview}</code></div>
+                        <label>Hash</label><div className="small"><code>{m.hash}</code></div>
+                        <label>Download</label>
+                        <div>
+                          <button
+                            className="btn"
+                            onClick={() => {
+                              const url = `${API_BASE}/api/boxes/${encodeURIComponent(saveId!)}/export?box=${selectedSlot.box}&slot=${selectedSlot.slot}`;
+                              window.open(url, "_blank");
+                            }}
                           >
                             Download .pk6
                           </button>
