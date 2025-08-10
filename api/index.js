@@ -16,7 +16,7 @@ import {
 import { readMeta, writeMeta } from "./store/meta.js";
 
 import cors from "cors";
-
+const app = express();
 // allow local dev ports only
 app.use(cors({
   origin: [
@@ -26,7 +26,7 @@ app.use(cors({
   credentials: false
 }));
 
-const app = express();
+
 app.use(express.json());
 
 // Where uploaded saves live (mounted as a volume in docker-compose)
