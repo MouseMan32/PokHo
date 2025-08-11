@@ -9,108 +9,131 @@ import cors from "cors";
 import { detectFormat } from "./parsers/detect.mjs";
 import {
   isLikelyXYSav,
-  readMetadata as xyReadMeta,
+  readMetadata as xyReadMeta, // placeholder currently
   readBoxes as xyReadBoxes,
   findBoxRegion,
   XY,
-  scoreXYRegion,        // <— optional if you use it
-  xyAutoPickOffset      // <— required for /autofix route
+  xyAutoPickOffsetFast,
 } from "./parsers/gen6_xy.mjs";
-import { readMeta, writeMeta } from "./store/meta.js";
 
-/* ------------------------------- App setup ------------------------------- */
+/* -----------------------------------------------------------------------------
+  App setup
+----------------------------------------------------------------------------- */
+
 const app = express();
 
-// CORS: allow your web UI on 8085 (or reflect any origin if preferred)
-app.use(
-  cors({
-    origin: ["http://localhost:8085", "http://127.0.0.1:8085", "http://192.168.1.175:8085"],
-    credentials: false,
-  })
-);
-
+// CORS: reflect any origin (handy for LAN use). Lock down later if you prefer.
+app.use(cors({ origin: true }));
 app.use(express.json());
 
-/* ------------------------------- Paths/dirs ------------------------------ */
+/* -----------------------------------------------------------------------------
+  Paths
+----------------------------------------------------------------------------- */
+
 const SAVES_DIR = process.env.SAVES_DIR || "/data/saves";
-const META_DIR = process.env.META_DIR || "/data/meta";
+const META_DIR  = process.env.META_DIR  || "/data/meta";
 fs.mkdirSync(SAVES_DIR, { recursive: true });
 fs.mkdirSync(META_DIR, { recursive: true });
 
-/* ----------------------- Multer: write directly to /data ----------------- */
+/* -----------------------------------------------------------------------------
+  Multer storage: write uploaded files directly into /data/saves
+----------------------------------------------------------------------------- */
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, SAVES_DIR),
   filename: (_req, file, cb) => {
-    const safeName = String(file.originalname || "upload").replace(/[^\w.\-]+/g, "_");
-    const id = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safeName}`;
+    const safe = String(file.originalname || "upload").replace(/[^\w.\-]+/g, "_");
+    const id = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}-${safe}`;
     cb(null, id);
   },
 });
 const upload = multer({ storage });
 
-/* ------------------------------ Health check ----------------------------- */
+/* -----------------------------------------------------------------------------
+  Tiny persistence helpers (meta + boxes cache)
+----------------------------------------------------------------------------- */
+
+function metaPath(id)       { return path.join(META_DIR, `${id}.json`); }
+function boxesCachePath(id) { return path.join(META_DIR, `${id}.boxes.json`); }
+
+function readMeta(id) {
+  const p = metaPath(id);
+  if (!fs.existsSync(p)) return {};
+  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return {}; }
+}
+function writeMeta(id, obj) {
+  fs.writeFileSync(metaPath(id), JSON.stringify(obj ?? {}, null, 2));
+}
+
+function readBoxesCache(id) {
+  const p = boxesCachePath(id);
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return null; }
+}
+function writeBoxesCache(id, payloadWithSha) {
+  try { fs.writeFileSync(boxesCachePath(id), JSON.stringify(payloadWithSha, null, 2)); } catch {}
+}
+
+/* -----------------------------------------------------------------------------
+  Health
+----------------------------------------------------------------------------- */
+
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-/* ------------------------------ List all saves --------------------------- */
+/* -----------------------------------------------------------------------------
+  Saves: list + upload
+----------------------------------------------------------------------------- */
+
 app.get("/api/saves", (_req, res) => {
   const files = fs.readdirSync(SAVES_DIR);
-  res.json(files.map((f) => ({ id: f, name: f.split("-").slice(2).join("-") || f })));
+  const list = files.map((f) => ({
+    id: f,
+    name: f.split("-").slice(2).join("-") || f,
+  }));
+  res.json(list);
 });
 
-/* -------------------------------- Upload save ---------------------------- */
-/* Writes directly to /data/saves (no cross-device rename). */
 app.post("/api/saves", upload.array("files"), (req, res) => {
   const uploaded = (req.files || []).map((f) => ({ id: f.filename, name: f.originalname }));
-  return res.status(201).json({ uploaded });
+  res.status(201).json({ uploaded });
 });
 
-/* ---------------- Manual game/generation override (persisted) ------------ */
+/* -----------------------------------------------------------------------------
+  Manual override (game/gen) + XY offset set
+----------------------------------------------------------------------------- */
+
 app.post("/api/saves/override", (req, res) => {
   const { id, game, generation } = req.body || {};
   if (!id || !game) return res.status(400).json({ error: "id and game required" });
-  const meta = readMeta(id) || {};
+  const meta = readMeta(id);
   meta.override = { game, generation: generation ?? "6" };
   writeMeta(id, meta);
   res.json({ ok: true, override: meta.override });
 });
 
-/* -------- Auto-fix XY offset: scan a window, pick best, persist ---------- */
-app.post("/api/saves/xy/autofix", (req, res) => {
-  const { id, hint } = req.body || {};
-  if (!id) return res.status(400).json({ error: "id required" });
+app.post("/api/saves/xy/region", (req, res) => {
+  const { id, offset } = req.body || {};
+  if (!id || offset === undefined) return res.status(400).json({ error: "id and offset required" });
 
-  const filePath = path.join(SAVES_DIR, id);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+  const offNum =
+    typeof offset === "string" && /^0x/i.test(offset) ? Number(offset) : Number(offset);
+  if (!Number.isInteger(offNum) || offNum < 0) return res.status(400).json({ error: "invalid offset" });
 
-  const buf = fs.readFileSync(filePath);
-  if (!isLikelyXYSav(buf)) return res.status(400).json({ error: "Save does not look like XY" });
+  const meta = readMeta(id);
+  meta.xy = meta.xy || {};
+  meta.xy.boxOffset = offNum;
+  writeMeta(id, meta);
 
-  // Use provided hint or fall back to the one in meta, else 0x22600 as a last resort
-  const meta = readMeta(id) || {};
-  const startHint = Number(
-    hint ?? meta?.xy?.boxOffset ?? 0x22600 // your closest candidate
-  );
+  // drop any stale boxes cache for this id
+  try { fs.unlinkSync(boxesCachePath(id)); } catch {}
 
-  // scan ±0x4000 around the hint in 0x10 steps; also test ±0x200 (size variant)
-  const { best, top } = xyAutoPickOffset(buf, startHint);
-
-  if (!best) return res.status(404).json({ error: "No plausible XY region found" });
-
-  // Persist and return top candidates to the UI
-  const m = readMeta(id) || {};
-  m.xy = m.xy || {};
-  m.xy.boxOffset = best.offset;
-  writeMeta(id, m);
-
-  res.json({
-    ok: true,
-    chosen: { offset: best.offset, score: best.score, reason: best.reason },
-    top: top.slice(0, 8), // preview a few
-  });
+  res.json({ ok: true, xy: meta.xy });
 });
 
+/* -----------------------------------------------------------------------------
+  Validate save
+----------------------------------------------------------------------------- */
 
-/* ------------------------------ Validate a save -------------------------- */
 app.post("/api/saves/validate", (req, res) => {
   try {
     const { id } = req.body || {};
@@ -123,8 +146,8 @@ app.post("/api/saves/validate", (req, res) => {
     const filename = id.split("-").slice(2).join("-") || id;
 
     const detected = detectFormat(buf, filename);
-    const override = readMeta(id)?.override;
-    const finalDetection = override
+    const override  = readMeta(id)?.override;
+    const final     = override
       ? {
           ...detected,
           game: override.game,
@@ -135,50 +158,72 @@ app.post("/api/saves/validate", (req, res) => {
       : detected;
 
     const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-    res.json({ filename, size: buf.length, sha256, detection: finalDetection });
+    res.json({ filename, size: buf.length, sha256, detection: final });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "Validation error" });
   }
 });
 
-/* ------------------ Debug: scan for likely XY region offsets ------------- */
+/* -----------------------------------------------------------------------------
+  Debug scan (XY): surface candidate offsets
+----------------------------------------------------------------------------- */
+
 app.get("/api/debug/xy/:id/scan", (req, res) => {
   const id = req.params.id;
   const filePath = path.join(SAVES_DIR, id);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
 
   const buf = fs.readFileSync(filePath);
-  if (!isLikelyXYSav(buf)) {
-    return res.status(400).json({ error: "Save does not look like XY (Citra) by size" });
-  }
-  const view = xyReadBoxes(buf, undefined); // uses internal scan and returns debug candidates
+  if (!isLikelyXYSav(buf)) return res.status(400).json({ error: "Save does not look like XY" });
+
+  const region = findBoxRegion(buf, undefined);
   res.json({
     fileSize: buf.length,
-    candidates: view.debug || [],
-    note: "Pick the top offset; if wrong, try the second.",
+    candidates: region.debug || [],
+    note: "Try the top candidate; if wrong, try the next.",
   });
 });
 
-/* ---------------- Manual set of XY region offset (persisted) ------------- */
-app.post("/api/saves/xy/region", (req, res) => {
-  const { id, offset } = req.body || {};
-  if (!id || offset === undefined) return res.status(400).json({ error: "id and offset required" });
+/* -----------------------------------------------------------------------------
+  Autofix (XY): fast auto-pick around a hint; persist best offset
+----------------------------------------------------------------------------- */
 
-  const offNum =
-    typeof offset === "string" && offset.trim().toLowerCase().startsWith("0x")
-      ? Number(offset)
-      : Number(offset);
-  if (!Number.isInteger(offNum) || offNum < 0) return res.status(400).json({ error: "invalid offset" });
+app.post("/api/saves/xy/autofix", (req, res) => {
+  const { id, hint } = req.body || {};
+  if (!id) return res.status(400).json({ error: "id required" });
+
+  const filePath = path.join(SAVES_DIR, id);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
+  const buf = fs.readFileSync(filePath);
+  if (!isLikelyXYSav(buf)) return res.status(400).json({ error: "Save does not look like XY" });
 
   const meta = readMeta(id) || {};
-  meta.xy = meta.xy || {};
-  meta.xy.boxOffset = offNum;
-  writeMeta(id, meta);
-  res.json({ ok: true, xy: meta.xy });
+  const startHint = Number(hint ?? meta?.xy?.boxOffset ?? 0x22600);
+
+  const { best, top } = xyAutoPickOffsetFast(buf, startHint);
+  if (!best) return res.status(404).json({ error: "No plausible XY region found" });
+
+  const m = readMeta(id);
+  m.xy = m.xy || {};
+  m.xy.boxOffset = best.offset;
+  writeMeta(id, m);
+
+  // drop any stale boxes cache for this id
+  try { fs.unlinkSync(boxesCachePath(id)); } catch {}
+
+  res.json({
+    ok: true,
+    chosen: { offset: best.offset, score: best.score },
+    top: top.slice(0, 10),
+  });
 });
 
-/* ----------------------- MAIN: get boxes/slots for a save ---------------- */
+/* -----------------------------------------------------------------------------
+  Boxes view (with cache) + pk6 export
+----------------------------------------------------------------------------- */
+
 app.get("/api/boxes/:id", (req, res) => {
   try {
     const id = req.params.id;
@@ -186,9 +231,10 @@ app.get("/api/boxes/:id", (req, res) => {
     if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
 
     const buf = fs.readFileSync(filePath);
+    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
     const filename = id.split("-").slice(2).join("-").toLowerCase();
 
-    // Single-Pokémon convenience: .pk* / .pb*
+    // Single-Pokémon convenience for raw .pk* / .pb* uploads
     if (/\.pk[1-9]$|\.pb[78]$/.test(filename)) {
       return res.json({
         game: "Single Pokémon file",
@@ -197,50 +243,57 @@ app.get("/api/boxes/:id", (req, res) => {
           { id: "box-1", name: "Imported", mons: [{ slot: 1, label: filename, empty: false }] },
         ],
         notes: "Displayed as a single-slot import.",
+        sha256,
       });
     }
 
-    const meta = readMeta(id) || {};
-    const overrideGame = meta?.override?.game || "";
-    const xyOverrideOffset = meta?.xy?.boxOffset; // number or undefined
-
-    const looksXY = overrideGame.startsWith("Pokémon X/Y") || isLikelyXYSav(buf);
-    if (looksXY) {
-      const view = xyReadBoxes(buf, xyOverrideOffset);
-      const md = xyReadMeta(buf);
-
-      // Auto-persist best candidate once (if none set yet)
-      if (xyOverrideOffset == null && view?.debug?.length) {
-        const best = view.debug[0];
-        const m = readMeta(id) || {};
-        m.xy = m.xy || {};
-        m.xy.boxOffset = best.offset;
-        writeMeta(id, m);
-        view.notes =
-          (view.notes ? view.notes + " " : "") + `Auto-saved offset 0x${best.offset.toString(16)}.`;
-      }
-
-      return res.json({ ...view, trainer: md.trainer });
+    // Serve from cache if identical sha
+    const cached = readBoxesCache(id);
+    if (cached && cached.sha256 === sha256 && cached.payload) {
+      return res.json(cached.payload);
     }
 
-    return res.json({
-      game: "unknown",
-      generation: "unknown",
-      boxes: [],
-      notes: "No parser for this game yet.",
-    });
+    const meta = readMeta(id) || {};
+    let offset = meta?.xy?.boxOffset;
+
+    // If no persisted offset, do a quick pick once
+    if (offset == null && isLikelyXYSav(buf)) {
+      const pick = xyAutoPickOffsetFast(buf, 0x22600);
+      if (pick?.best?.offset != null) {
+        offset = pick.best.offset;
+        const m = readMeta(id) || {};
+        m.xy = m.xy || {};
+        m.xy.boxOffset = offset;
+        writeMeta(id, m);
+      }
+    }
+
+    // Decode boxes
+    let view;
+    if (isLikelyXYSav(buf)) {
+      view = xyReadBoxes(buf, offset);
+      view = { ...view, trainer: xyReadMeta(buf)?.trainer ?? null };
+    } else {
+      view = { game: "unknown", generation: "unknown", boxes: [], notes: "No parser for this game yet." };
+    }
+
+    // Attach sha and offsetUsed for UI clarity
+    const payload = { ...view, sha256, offsetUsed: offset ?? view?.offset ?? null };
+
+    // Save cache
+    writeBoxesCache(id, { sha256, payload, savedAt: Date.now() });
+
+    res.json(payload);
   } catch (e) {
     console.error(e);
-    return res.status(500).json({ error: "Boxes error" });
+    res.status(500).json({ error: "Boxes error" });
   }
 });
 
-/* ------------------- QOL: export one slot as .pk6 (XY) ------------------- */
 app.get("/api/boxes/:id/export", (req, res) => {
   const id = req.params.id;
-  const box = Number(req.query.box); // 1..31
+  const box = Number(req.query.box);  // 1..31
   const slot = Number(req.query.slot); // 1..30
-
   if (!(box >= 1 && box <= 31 && slot >= 1 && slot <= 30)) {
     return res.status(400).json({ error: "box must be 1..31 and slot 1..30" });
   }
@@ -249,12 +302,11 @@ app.get("/api/boxes/:id/export", (req, res) => {
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
 
   const buf = fs.readFileSync(filePath);
-  const region = findBoxRegion(buf, readMeta(id)?.xy?.boxOffset);
+  const meta = readMeta(id) || {};
+  const region = findBoxRegion(buf, meta?.xy?.boxOffset);
 
   if (region.offset == null) {
-    return res
-      .status(400)
-      .json({ error: "XY region not found; set offset via /api/saves/xy/region." });
+    return res.status(400).json({ error: "XY region not found; set offset or run autofix." });
   }
 
   const slotIndex = (box - 1) * XY.SLOTS_PER_BOX + (slot - 1);
@@ -263,23 +315,19 @@ app.get("/api/boxes/:id/export", (req, res) => {
   if (end > buf.length) return res.status(400).json({ error: "Computed slot out of range" });
 
   const blob = buf.subarray(start, end);
-  let allZero = true;
-  for (let i = 0; i < blob.length; i++) {
-    if (blob[i] !== 0) {
-      allZero = false;
-      break;
-    }
-  }
-  if (allZero) return res.status(204).end();
+  // skip empty
+  let nonzero = false;
+  for (let i = 0; i < blob.length; i++) { if (blob[i] !== 0) { nonzero = true; break; } }
+  if (!nonzero) return res.status(204).end();
 
   res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader(
-    "Content-Disposition",
-    `attachment; filename="xy-box${box}-slot${slot}.pk6"`
-  );
+  res.setHeader("Content-Disposition", `attachment; filename="xy-box${box}-slot${slot}.pk6"`);
   res.send(Buffer.from(blob));
 });
 
-/* --------------------------------- Start --------------------------------- */
+/* -----------------------------------------------------------------------------
+  Start
+----------------------------------------------------------------------------- */
+
 const port = process.env.PORT || 8095;
 app.listen(port, () => console.log(`openhome-api listening on :${port}`));
