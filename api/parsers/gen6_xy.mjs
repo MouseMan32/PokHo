@@ -344,8 +344,6 @@ export function readBoxes(buf, overrideOffset) {
   const region = findBoxRegion(buf, overrideOffset);
   const off = region.offset;
   const boxes = [];
-  const trimmed =
-    lastNonEmptyBox >= 0 ? boxes.slice(0, lastNonEmptyBox + 1) : boxes.slice(0, 1);
   if (off == null) {
     return [];
   }
