@@ -204,40 +204,62 @@ function scoreOffsetForBox1(buf, base) {
 }
 // Brute-force around a hint with fast+full refinement (best for autofix)
 
-export function xyAutoPickOffsetFast(buf, hint = 0x22600) {
-  // Build a sliding window around the common XY base and evaluate quickly.
-  const window = [
-    ...Array.from({ length: 32 }, (_, k) => hint + k * 0x100),
-    ...Array.from({ length: 32 }, (_, k) => hint - (k + 1) * 0x100),
-  ].filter(n => Number.isInteger(n) && n >= 0 && n + XY.SLOT_SIZE < buf.length);
+export function xyAutoPickOffsetFast(buf, hintOffset = 0) {
+  // Heuristic sweep: scan the whole save in coarse steps, test 1–2 boxes worth,
+  // keep top candidates, then phase-align and pick the best.
+  const XY = {
+    SLOT_SIZE: 0xE8,          // 232
+    SLOTS_PER_BOX: 30,
+    BOX_STRIDE: 0xE8 * 30,
+    decodeSlot: decodeSlot,   // use your existing function
+  };
 
-  // Coarse scan using the fast scorer
-  const coarse = [];
-  for (const off of window) {
-    const s = scoreOffsetForBox1(buf, off);   // already in your file
-    coarse.push({ offset: off, coarse: s });
+  const len = buf.length;
+  const stepCoarse = 0x400;   // 1KB stride to stay fast
+  const candidates = [];
+
+  for (let off = 0; off + XY.BOX_STRIDE * 2 < len; off += stepCoarse) {
+    // quick prefilter: require some non-zero bytes
+    let nz = false;
+    for (let i = 0; i < 64; i++) { if (buf[off + i]) { nz = true; break; } }
+    if (!nz) continue;
+
+    // Try all 0..(SLOT_SIZE-1) phases cheaply by sampling every slot 4:
+    // (this keeps the loop cheap but still finds PK6 alignment)
+    let bestPhaseScore = -Infinity;
+    let bestPhase = 0;
+    for (let p = 0; p < XY.SLOT_SIZE; p += 4) {
+      const base = off + p;
+      const score = scoreFirstBox(buf, base, XY);
+      if (score > bestPhaseScore) { bestPhaseScore = score; bestPhase = p; }
+    }
+
+    if (bestPhaseScore >= 30) { // rough threshold: “box-like”
+      candidates.push({ off: off + bestPhase, score: bestPhaseScore });
+      if (candidates.length > 64) {
+        candidates.sort((a,b) => b.score - a.score);
+        candidates.length = 32; // keep top 32 as we go
+      }
+    }
   }
 
-  // shortlist the top candidates
-  coarse.sort((a, b) => b.coarse.score - a.coarse.score);
-  const shortlist = coarse.slice(0, 15);
+  if (candidates.length === 0) {
+    return { best: null, top: [] };
+  }
 
-  // refine with the full region scorer
-  const refined = shortlist
-    .map(c => {
-      const full = scoreXYRegion(buf, c.offset); // already in your file
-      return { offset: c.offset, full };
-    })
-    .sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
+  // Refine each candidate to the true box start, re-score, and pick the best.
+  const refined = candidates.map(c => {
+    const aligned = refineToBoxStart(buf, c.off, XY);
+    return { off: aligned, score: scoreFirstBox(buf, aligned, XY) };
+  }).sort((a,b) => b.score - a.score);
 
-  const best = refined[0] || null;
-
-  // ✅ return is now inside the function, using your expected shape
+  const best = refined[0];
   return {
-    best: best ? { offset: best.offset, ...best.full } : null,
-    top: Array.isArray(refined) ? refined.slice(0, 10) : []
+    best: best ? { offset: best.off } : null,
+    top: refined.slice(0, 10)
   };
 }
+
 
 
 export function refineAround(buf, base) {
@@ -312,10 +334,44 @@ function scanCandidates(buf) {
 
 }
 
+function scoreFirstBox(buf, base, XY) {
+  const step = XY.SLOT_SIZE;
+  let good = 0, bad = 0;
+  for (let s = 0; s < XY.SLOTS_PER_BOX; s++) {
+    const start = base + s * step, end = start + step;
+    if (end > buf.length) { bad += (XY.SLOTS_PER_BOX - s); break; }
+    const mon = XY.decodeSlot(buf.subarray(start, end));
+    if (mon && mon.checksumOK && mon.species >= 1 && mon.species <= 721) good++;
+    else bad++;
+  }
+  // reward density, penalize junk
+  return good * 2 - bad;
+}
+
+function refineToBoxStart(buf, off, XY) {
+  const step = XY.SLOT_SIZE;
+  let best = { off, score: -Infinity };
+  // search ±200 slots (~46KB) for the phase that looks most like “start of a real box”
+  for (let k = -200; k <= 200; k++) {
+    const o = off + k * step;
+    if (o < 0) continue;
+    const score = scoreFirstBox(buf, o, XY);
+    if (score > best.score) best = { off: o, score };
+  }
+  return best.off;
+}
+
+
 export function findBoxRegion(buf, overrideOffset) {
   if (Number.isInteger(overrideOffset) && overrideOffset >= 0) {
     return { offset: Number(overrideOffset), debug: [{ offset: Number(overrideOffset), note: "override" }] };
   }
+const fast = xyAutoPickOffsetFast(buf, 0x0); // hint optional
+let off = fast?.best?.offset ?? null;
+if (off != null) off = refineToBoxStart(buf, off, XY); // XY in scope or pass in
+return { offset: off, debug: { source: off ? "refined-fast" : "none", fast } };
+
+
   // try a broad scan; if empty, widen by trying ±0x200 around a common seed
   let cands = scanCandidates(buf);
   if (!cands.length) {
