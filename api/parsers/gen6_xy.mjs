@@ -290,7 +290,7 @@ export function refineAround(buf, base) {
   }).sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
 
   const best = refined[0] || null;
-  return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
+    return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
 }
 
 // Legacy autopick (full brute around hint) – still exported if you want it
