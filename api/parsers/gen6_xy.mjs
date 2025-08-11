@@ -307,44 +307,81 @@ export function readBoxes(buf, overrideOffset) {
     };
   }
 
+  const isValidMon = (d) =>
+    !!d &&
+    d.checksumOK === true &&
+    typeof d.species === "number" &&
+    d.species >= 1 &&
+    d.species <= 721 &&
+    typeof d.pid === "number" &&
+    d.pid !== 0;
+
+  let lastNonEmptyBox = -1;
+
   for (let b = 0; b < XY.BOXES; b++) {
     const mons = [];
+    let boxHasMon = false;
+
     for (let s = 0; s < XY.SLOTS_PER_BOX; s++) {
       const idx = b * XY.SLOTS_PER_BOX + s;
       const start = off + idx * XY.SLOT_SIZE;
       const end = start + XY.SLOT_SIZE;
+
       if (end > buf.length) {
         mons.push({ slot: s + 1, empty: true });
         continue;
       }
+
       const slice = buf.subarray(start, end);
-      if (isAllZero(slice)) {
+
+      // quick zero check
+      let nonzero = false;
+      for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nonzero = true; break; } }
+      if (!nonzero) {
         mons.push({ slot: s + 1, empty: true });
-      } else {
-        const d = decodePK6(slice) || {};
+        continue;
+      }
+
+      const d = XY.decodeSlot(slice);
+
+      if (isValidMon(d)) {
+        boxHasMon = true;
         mons.push({
           slot: s + 1,
           empty: false,
-          species: d.species ?? null,
+          species: d.species,
           nature: d.nature ?? null,
           shiny: !!d.shiny,
-          pid: d.pid ?? null,
+          pid: d.pid,
           tid: d.tid ?? null,
           sid: d.sid ?? null,
-          checksumOK: d.checksumOK ?? null,
+          checksumOK: true,
           preview: d.preview,
           hash: d.hash,
         });
+      } else {
+        // Treat invalid/garbage as empty so we don't “fill” boxes
+        mons.push({ slot: s + 1, empty: true });
       }
     }
+
+    if (boxHasMon) lastNonEmptyBox = b;
     boxes.push({ id: `box-${b + 1}`, name: `Box ${String(b + 1).padStart(2, "0")}`, mons });
   }
+
+  // Trim trailing all-empty boxes (keep at least 1 to show the grid)
+  const trimmed =
+    lastNonEmptyBox >= 0 ? boxes.slice(0, lastNonEmptyBox + 1) : boxes.slice(0, 1);
 
   return {
     game: "Pokémon X/Y (Citra)",
     generation: "6",
-    boxes,
-    notes: "XY view generated.",
+    boxes: trimmed,
+    notes:
+      lastNonEmptyBox >= 0
+        ? `Showing ${trimmed.length} box(es).`
+        : "No valid Pokémon found in boxes."
+        ,
     debug: region.debug,
     region,
     offset: off,
