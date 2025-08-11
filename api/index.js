@@ -153,10 +153,10 @@ app.post("/api/saves/validate", (req, res) => {
   }
 });
 
-// Manual override for game/generation (also useful to stash manual offset)
+// Manual override for game/generation (also useful to stash manual )
 app.post("/api/saves/override", (req, res) => {
   try {
-    const { id, game, generation, xyRegionOffset } = req.body || {};
+    const { id, game, generation, xyRegion } = req.body || {};
     if (!id) return res.status(400).json({ error: "id required" });
     const meta = readMeta(id);
     if (!meta || !fs.existsSync(path.join(SAVES_DIR, id))) {
@@ -186,14 +186,35 @@ app.get("/api/boxes/:id", (req, res) => {
 
     const meta = readMeta(id) || {};
     // Use saved offset if present; else pick/refine; else try findBoxRegion
-    let offset = Number(meta.xyRegionOffset);
-    if (!Number.isInteger(offset) || offset < 0) {
-      const fast = XY.xyAutoPickOffsetFast(buf, 0x22600);
-      const choice = fast.best ? XY.refineAround(buf, fast.best.offset) : null;
-      offset = choice?.offset ?? XY.findBoxRegion(buf, null)?.offset ?? 0x22600;
-      meta.xyRegionOffset = offset;
-      writeMeta(id, meta);
-    }
+let offset = Number(meta.xyRegionOffset);
+
+// Recompute if missing/invalid or caller forced a refresh (?recalc=1)
+const forceRecalc = String(req.query.recalc || "") === "1";
+if (!Number.isInteger(offset) || offset < 0 || forceRecalc) {
+  // NEW: prefer the refined picker
+  const region = XY.findBoxRegion(buf, null);
+  let picked = region?.offset ?? null;
+
+  // Fallback to legacy fast+refine (no hint bias)
+  if (!Number.isInteger(picked) || picked < 0) {
+    const fast = XY.xyAutoPickOffsetFast(buf, 0x0); // 0x0 = sweep whole file
+    const choice = fast?.best ? XY.refineAround(buf, fast.best.offset) : null;
+    picked = choice?.offset ?? null;
+  }
+
+  // Last-resort default (keeps something showing during dev)
+  if (!Number.isInteger(picked) || picked < 0) {
+    picked = 0x22600;
+  }
+
+  offset = picked;
+  meta.xyRegionOffset = offset;
+  writeMeta(id, meta);
+
+  // Optional: one-line debug
+  console.log(`XY pick for ${id}: offset=0x${offset.toString(16)}`);
+}
+
 
     const boxes = XY.readBoxes(buf, offset);
     const out = {
