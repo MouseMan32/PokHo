@@ -102,6 +102,8 @@ function decryptPk6(slotBytes) {
 export function isLikelyXYSav(buf) {
   return buf?.length === XY_EXPECTED_SIZE;
 }
+export function scoreXYRegion(buf, offset) { /* ... */ }
+export function xyAutoPickOffset(buf, hint) { /* ... */ }
 
 export function readMetadata(buf) {
   const ok = isLikelyXYSav(buf);
