@@ -1,13 +1,37 @@
-// Very simple detector so the API can run.
-// We recognize Citra XY saves by size; otherwise "unknown".
+// api/parsers/detect.mjs
+import { XY_EXPECTED_SIZES } from "./gen6_xy.mjs";
+
 export function detectFormat(buf, filename = "") {
-  const XY_EXPECTED_SIZE = 0x65600; // 415,744
-  const looksXY = buf?.length === XY_EXPECTED_SIZE;
+  const name = (filename || "").toLowerCase().trim();
+
+  // Single-Pokémon files (quick pass-through)
+  if (/\.(pk[1-9]|pb[78])$/.test(name)) {
+    return {
+      kind: "single-pokemon",
+      game: "Single Pokémon blob",
+      generation: "unknown",
+      confidence: 0.95,
+      notes: "Detected by file extension",
+    };
+  }
+
+  // Pokémon X/Y (Citra/JKSV) saves: two common sizes
+  if (buf && XY_EXPECTED_SIZES.includes(buf.length)) {
+    return {
+      kind: "citra-xy",
+      game: "Pokémon X/Y (Citra)",
+      generation: "6",
+      confidence: 0.9,
+      notes: `Detected by XY save size (${buf.length} bytes)`,
+    };
+  }
+
+  // Unknown (fallback)
   return {
-    kind: looksXY ? "citra-xy" : "unknown",
-    game: looksXY ? "Pokémon X/Y (Citra)" : "unknown",
-    generation: looksXY ? "6" : "unknown",
-    confidence: looksXY ? 0.9 : 0.2,
-    notes: looksXY ? "Detected by XY Citra save size (0x65600)" : "No match",
+    kind: "unknown",
+    game: "unknown",
+    generation: "unknown",
+    confidence: 0.2,
+    notes: "No known signature matched",
   };
 }
