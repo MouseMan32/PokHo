@@ -106,6 +106,27 @@ export default function App() {
       setErr(e?.message || "Failed to reach API");
     }
   }
+  
+  async function runAutofix(id: string) {
+    try {
+      setBusy(true);
+      const r = await api<{ ok: boolean; chosen?: { offset: number } }>("/api/saves/xy/autofix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, hint: "0x22600" }),
+      });
+      if (r?.ok) {
+        await loadBoxes(id);
+        alert(`Auto-fixed. Using XY offset: 0x${Number(r.chosen?.offset).toString(16)}`);
+      } else {
+        alert("Autofix couldn’t find a good region.");
+      }
+    } catch (e: any) {
+      alert(e?.message || "Autofix failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   /** actions */
   async function onUpload(e: React.ChangeEvent<HTMLInputElement>) {
