@@ -146,6 +146,10 @@ export default function App() {
         await validateSave(uploaded[0].id);
         await loadBoxes(uploaded[0].id); // auto-open boxes after upload
       }
+      <button className="btn primary" onClick={() => saveId && runAutofix(saveId)}>
+      Auto-Fix Offset
+      </button>
+
       // still validate any extras
       for (const f of uploaded.slice(1)) await validateSave(f.id);
     } catch (e: any) {
