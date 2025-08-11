@@ -6,7 +6,7 @@ import path from "path";
 import crypto from "crypto";
 import cors from "cors";
 
-import { detectFormat } from "./parsers/detect.js";
+import { detectFormat } from "./parsers/detect.mjs";
 import {
   isLikelyXYSav,
   readMetadata as xyReadMeta,
@@ -15,7 +15,7 @@ import {
   XY,
   scoreXYRegion,        // <— optional if you use it
   xyAutoPickOffset      // <— required for /autofix route
-} from "./parsers/gen6_xy.js";
+} from "./parsers/gen6_xy.mjs";
 import { readMeta, writeMeta } from "./store/meta.js";
 
 /* ------------------------------- App setup ------------------------------- */
