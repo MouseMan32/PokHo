@@ -312,9 +312,7 @@ export function readBoxes(buf, overrideOffset) {
     d.checksumOK === true &&
     typeof d.species === "number" &&
     d.species >= 1 &&
-    d.species <= 721 &&
-    typeof d.pid === "number" &&
-    d.pid !== 0;
+    d.species <= 721;
 
   let lastNonEmptyBox = -1;
 
