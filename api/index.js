@@ -221,57 +221,78 @@ app.post("/api/saves/xy/autofix", (req, res) => {
 });
 
 /* -----------------------------------------------------------------------------
-  Boxes view (with cache) + pk6 export
+  Boxes view (with cache)
 ----------------------------------------------------------------------------- */
 
-app.get("/api/boxes/:id/export", (req, res) => {
-  const id = req.params.id;
-  const box = Number(req.query.box);
-  const slot = Number(req.query.slot);
-  if (!(box >= 1 && box <= 31 && slot >= 1 && slot <= 30)) {
-    return res.status(400).json({ error: "box must be 1..31 and slot 1..30" });
+app.get("/api/boxes/:id", (req, res) => {
+  try {
+    const id = req.params.id;
+    const filePath = path.join(SAVES_DIR, id);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
+    const buf = fs.readFileSync(filePath);
+    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+    const filename = id.split("-").slice(2).join("-").toLowerCase();
+
+    // Single-Pokémon convenience for raw .pk* / .pb* uploads
+    if (/\.pk[1-9]$|\.pb[78]$/.test(filename)) {
+      return res.json({
+        game: "Single Pokémon file",
+        generation: "unknown",
+        boxes: [
+          { id: "box-1", name: "Imported", mons: [{ slot: 1, label: filename, empty: false }] },
+        ],
+        notes: "Displayed as a single-slot import.",
+        sha256,
+      });
+    }
+
+    // Serve from cache if identical sha
+    const cached = readBoxesCache(id);
+    if (cached && cached.sha256 === sha256 && cached.payload) {
+      return res.json(cached.payload);
+    }
+
+    const meta = readMeta(id) || {};
+    let offset = meta?.xy?.boxOffset;
+
+    // If no persisted offset, do a quick pick once
+    if (offset == null && isLikelyXYSav(buf)) {
+      const pick = xyAutoPickOffsetFast(buf, 0x22600);
+      if (pick?.best?.offset != null) {
+        offset = pick.best.offset;
+        const m = readMeta(id) || {};
+        m.xy = m.xy || {};
+        m.xy.boxOffset = offset;
+        writeMeta(id, m);
+      }
+    }
+
+    // Decode boxes
+    let view;
+    if (isLikelyXYSav(buf)) {
+      view = xyReadBoxes(buf, offset);
+      view = { ...view, trainer: xyReadMeta(buf)?.trainer ?? null };
+    } else {
+      view = { game: "unknown", generation: "unknown", boxes: [], notes: "No parser for this game yet." };
+    }
+
+    // Attach sha and offsetUsed for UI clarity
+    const payload = { ...view, sha256, offsetUsed: offset ?? view?.offset ?? null };
+
+    // Save cache
+    writeBoxesCache(id, { sha256, payload, savedAt: Date.now() });
+
+    res.json(payload);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Boxes error" });
   }
-
-  const filePath = path.join(SAVES_DIR, id);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
-
-  const buf = fs.readFileSync(filePath);
-  const meta = readMeta(id) || {};
-  const region = findBoxRegion(buf, meta?.xy?.boxOffset);
-  if (region.offset == null) {
-    return res.status(400).json({ error: "XY region not found; set offset or run autofix." });
-  }
-
-  const slotIndex = (box - 1) * XY.SLOTS_PER_BOX + (slot - 1);
-  const start = region.offset + slotIndex * XY.SLOT_SIZE;
-  const end = start + XY.SLOT_SIZE;
-  if (end > buf.length) return res.status(400).json({ error: "Computed slot out of range" });
-
-  const blob = buf.subarray(start, end);
-
-  // Empty or invalid? return 204 (No Content)
-  let nonzero = false;
-  for (let i = 0; i < blob.length; i++) { if (blob[i] !== 0) { nonzero = true; break; } }
-  if (!nonzero) return res.status(204).end();
-
-  // Validate with the same rules we used to display
-  const { decodeSlot } = XY;
-  const d = decodeSlot(blob);
-  const valid =
-    d &&
-    d.checksumOK === true &&
-    typeof d.species === "number" &&
-    d.species >= 1 &&
-    d.species <= 721 &&
-    typeof d.pid === "number" &&
-    d.pid !== 0;
-
-  if (!valid) return res.status(204).end();
-
-  res.setHeader("Content-Type", "application/octet-stream");
-  res.setHeader("Content-Disposition", `attachment; filename="xy-box${box}-slot${slot}.pk6"`);
-  res.send(Buffer.from(blob));
 });
+
+/* -----------------------------------------------------------------------------
+  pk6 export (single route)
+----------------------------------------------------------------------------- */
 
 app.get("/api/boxes/:id/export", (req, res) => {
   const id = req.params.id;
@@ -298,10 +319,24 @@ app.get("/api/boxes/:id/export", (req, res) => {
   if (end > buf.length) return res.status(400).json({ error: "Computed slot out of range" });
 
   const blob = buf.subarray(start, end);
-  // skip empty
+
+  // Empty?
   let nonzero = false;
   for (let i = 0; i < blob.length; i++) { if (blob[i] !== 0) { nonzero = true; break; } }
   if (!nonzero) return res.status(204).end();
+
+  // Validate with same rules we use for display
+  const d = XY.decodeSlot(blob);
+  const valid =
+    d &&
+    d.checksumOK === true &&
+    typeof d.species === "number" &&
+    d.species >= 1 &&
+    d.species <= 721 &&
+    typeof d.pid === "number" &&
+    d.pid !== 0;
+
+  if (!valid) return res.status(204).end();
 
   res.setHeader("Content-Type", "application/octet-stream");
   res.setHeader("Content-Disposition", `attachment; filename="xy-box${box}-slot${slot}.pk6"`);
