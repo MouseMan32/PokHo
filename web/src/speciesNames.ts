@@ -15,3 +15,4 @@ export function getSpeciesName(id: number): string {
   const s = speciesNames[id];
   return s && s.length ? s : `#${id}`;
 }
+
