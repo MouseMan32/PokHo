@@ -148,68 +148,30 @@ function scoreXYRegionFast(buf, offset, { sampleStride = 12, badEarlyOut = 30 } 
       if (bad >= badEarlyOut) break;
     }
   }
-
   return { score: ok * 2 + plausibleSpecies * 1 - bad * 0.5, ok, bad, plausibleSpecies };
-
 }
 function scoreOffsetForBox1(buf, base) {
-
   const maxSlots = Math.min(90, Math.floor((buf.length - base) / XY.SLOT_SIZE)); // ~3 boxes
-
   if (maxSlots <= 0) return { valid: 0, unique: 0, speciesCounts: {}, tidLeader: null, tidConsensus: 0, score: 0 };
-
-
-
   let valid = 0;
-
   const speciesCounts = new Map();  // species -> count
-
   const tidCounts = new Map();      // "tid/sid" -> count
-
-
-
   for (let i = 0; i < maxSlots; i++) {
-
     const start = base + i * XY.SLOT_SIZE;
-
     const end = start + XY.SLOT_SIZE;
-
     const slice = buf.subarray(start, end);
-
-
-
     // zero fast-path
-
     let nz = false;
-
     for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nz = true; break; } }
-
     if (!nz) continue;
-
-
-
     const d = decodePK6(slice);  // already requires checksumOK + species in 1..721
-
     if (!d) continue;
-
-
-
     valid++;
-
     speciesCounts.set(d.species, (speciesCounts.get(d.species) || 0) + 1);
-
     const key = `${d.tid}/${d.sid}`;
-
     tidCounts.set(key, (tidCounts.get(key) || 0) + 1);
-
   }
-
-
-
   const unique = speciesCounts.size;
-
-
-
   // Leader (most common) TID/SID and its share
 
   let tidLeader = null, tidMax = 0;
@@ -221,86 +183,62 @@ function scoreOffsetForBox1(buf, base) {
   }
 
   const tidConsensus = valid > 0 ? tidMax / valid : 0;
-
-
-
   // Heuristic: prefer many valids, diverse species, and strong TID/SID consensus
-
   // small penalty if a single species dominates unrealistically
-
   let dom = 0;
-
   for (const c of speciesCounts.values()) dom = Math.max(dom, c);
-
   const dominationPenalty = dom > 12 ? (dom - 12) * 0.25 : 0;
-
-
-
   const score =
-
     valid * 1.0 +
-
     unique * 0.5 +
-
     tidConsensus * 15 -  // <- big boost for matching your trainer
-
     dominationPenalty;
-
-
-
   return {
-
     valid,
-
     unique,
-
     speciesCounts: Object.fromEntries(speciesCounts),
-
     tidLeader,
-
     tidConsensus,
-
     score,
-
   };
-
 }
-
-
 // Brute-force around a hint with fast+full refinement (best for autofix)
 
 export function xyAutoPickOffsetFast(buf, hint = 0x22600) {
-
+  // Build a sliding window around the common XY base and evaluate quickly.
   const window = [
-
     ...Array.from({ length: 32 }, (_, k) => hint + k * 0x100),
-
     ...Array.from({ length: 32 }, (_, k) => hint - (k + 1) * 0x100),
-
   ].filter(n => Number.isInteger(n) && n >= 0 && n + XY.SLOT_SIZE < buf.length);
 
-
-  const candidates = [];
-
+  // Coarse scan using the fast scorer
+  const coarse = [];
   for (const off of window) {
-
-    const s = scoreOffsetForBox1(buf, off);
-
-    candidates.push({ offset: off, ...s });
-
+    const s = scoreOffsetForBox1(buf, off);   // already in your file
+    coarse.push({ offset: off, coarse: s });
   }
 
-  candidates.sort((a, b) => b.score - a.score);
+  // shortlist the top candidates
+  coarse.sort((a, b) => b.coarse.score - a.coarse.score);
+  const shortlist = coarse.slice(0, 15);
 
+  // refine with the full region scorer
+  const refined = shortlist
+    .map(c => {
+      const full = scoreXYRegion(buf, c.offset); // already in your file
+      return { offset: c.offset, full };
+    })
+    .sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
+
+  const best = refined[0] || null;
+
+  // ✅ return is now inside the function, using your expected shape
   return {
-
     best: best ? { offset: best.offset, ...best.full } : null,
-
-    top: refined.slice(0, 10)
-
+    top: Array.isArray(refined) ? refined.slice(0, 10) : []
   };
-
 }
+
 
 export function refineAround(buf, base) {
 
@@ -357,45 +295,23 @@ export function refineAround(buf, base) {
 // Legacy autopick (full brute around hint) – still exported if you want it
 
 export function xyAutoPickOffset(buf, hint) {
-
   const candidates = new Map(); // offset -> result
-
   const push = (off, reason) => {
-
     if (off < 0 || off >= buf.length) return;
-
     if (candidates.has(off)) return;
-
     const r = scoreXYRegion(buf, off);
-
     candidates.set(off, { offset: off, reason, ...r });
-
   };
-
-
-
   const base = Number(hint || 0);
-
   const baseHints = [base, base + 0x200, base - 0x200];
-
-
-
   for (const h of baseHints) {
-
     for (let d = -0x4000; d <= 0x4000; d += 0x10) {
-
       push(h + d, (h === base ? "hint" : (h > base ? "+0x200" : "-0x200")));
-
     }
-
   }
 
   const top = Array.from(candidates.values())
-
     .sort((a, b) => b.score - a.score || a.bad - b.bad);
-
-
-
   return { best: top[0], top };
 
 }
@@ -407,101 +323,58 @@ export function xyAutoPickOffset(buf, hint) {
 // Coarse scan to surface promising regions (used by /debug/xy/:id/scan)
 
 function scanCandidates(buf) {
-
   const step = 0x100; // coarse stride
-
   const max = Math.max(0, buf.length - XY.SLOT_SIZE * XY.BOXES * XY.SLOTS_PER_BOX);
-
   const results = [];
 
 
 
   for (let off = 0; off <= max; off += step) {
-
     const r = scoreXYRegionFast(buf, off, { sampleStride: 10, badEarlyOut: 30 });
-
     if (r.ok >= 8 && r.score > 8) {
-
       results.push({ offset: off, ...r });
-
     }
-
   }
 
   results.sort((a, b) => b.score - a.score || a.bad - b.bad);
-
   return results.slice(0, 25);
 
 }
 
 export function findBoxRegion(buf, overrideOffset) {
-
   if (Number.isInteger(overrideOffset) && overrideOffset >= 0) {
-
     return { offset: Number(overrideOffset), debug: [{ offset: Number(overrideOffset), note: "override" }] };
-
   }
-
   // try a broad scan; if empty, widen by trying ±0x200 around a common seed
-
   let cands = scanCandidates(buf);
-
   if (!cands.length) {
-
     const seeds = [0x22600, 0x22600 + 0x200, 0x22600 - 0x200];
-
     for (const s of seeds) {
-
       for (let d = -0x4000; d <= 0x4000; d += 0x80) {
-
         const off = s + d;
-
         if (off < 0) continue;
-
         const r = scoreXYRegionFast(buf, off, { sampleStride: 12, badEarlyOut: 30 });
-
         if (r.ok >= 6 && r.score > 6) cands.push({ offset: off, ...r });
-
       }
-
     }
-
     cands.sort((a, b) => b.score - a.score || a.bad - b.bad);
-
     cands = cands.slice(0, 25);
-
   }
-
   const best = cands[0] || null;
-
   return { offset: best ? best.offset : null, debug: cands };
 
 }
-
 /* ----------------------------- Metadata & Boxes ----------------------------- */
-
-
-
 export function readMetadata(_buf) {
-
   // Minimal placeholder; extend if/when you decode trainer data
-
   return { trainer: null };
-
 }
-
 export function readBoxes(buf, overrideOffset) {
-
   const region = findBoxRegion(buf, overrideOffset);
-
   const off = region.offset;
-
   const boxes = [];
-
   if (off == null) {
-
     return {
-
       game: "Pokémon X/Y (Citra)",
       generation: "6",
       boxes: [],
@@ -513,157 +386,71 @@ export function readBoxes(buf, overrideOffset) {
   }
 
   const isValidMon = (d) =>
-
     !!d &&
-
     d.checksumOK === true &&
-
     typeof d.species === "number" &&
-
     d.species >= 1 &&
-
     d.species <= 721;
-
-
-
-  let lastNonEmptyBox = -1;
-
-
-
+ 
+ let lastNonEmptyBox = -1;
   for (let b = 0; b < XY.BOXES; b++) {
-
     const mons = [];
-
     let boxHasMon = false;
-
-
-
     for (let s = 0; s < XY.SLOTS_PER_BOX; s++) {
-
       const idx = b * XY.SLOTS_PER_BOX + s;
-
       const start = off + idx * XY.SLOT_SIZE;
-
       const end = start + XY.SLOT_SIZE;
-
-
-
       if (end > buf.length) {
-
         mons.push({ slot: s + 1, empty: true });
-
         continue;
-
       }
-
-
-
       const slice = buf.subarray(start, end);
-
-
-
       // quick zero check
-
       let nonzero = false;
-
       for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nonzero = true; break; } }
-
       if (!nonzero) {
-
         mons.push({ slot: s + 1, empty: true });
-
         continue;
-
       }
-
-
-
       const d = XY.decodeSlot(slice);
-
-
-
       if (isValidMon(d)) {
-
         boxHasMon = true;
-
         mons.push({
-
           slot: s + 1,
-
           empty: false,
-
           species: d.species,
-
           nature: d.nature ?? null,
-
           shiny: !!d.shiny,
-
           pid: d.pid,
-
           tid: d.tid ?? null,
-
           sid: d.sid ?? null,
-
           checksumOK: true,
-
           preview: d.preview,
-
           hash: d.hash,
-
         });
-
       } else {
-
         // Treat invalid/garbage as empty so we don't “fill” boxes
-
         mons.push({ slot: s + 1, empty: true });
-
       }
-
     }
-
-
-
     if (boxHasMon) lastNonEmptyBox = b;
-
     boxes.push({ id: `box-${b + 1}`, name: `Box ${String(b + 1).padStart(2, "0")}`, mons });
-
   }
-
-
-
   // Trim trailing all-empty boxes (keep at least 1 to show the grid)
-
   const trimmed =
-
     lastNonEmptyBox >= 0 ? boxes.slice(0, lastNonEmptyBox + 1) : boxes.slice(0, 1);
-
-
-
   return {
-
     game: "Pokémon X/Y (Citra)",
-
     generation: "6",
-
     boxes: trimmed,
-
     notes:
-
       lastNonEmptyBox >= 0
-
         ? `Showing ${trimmed.length} box(es).`
-
         : "No valid Pokémon found in boxes."
-
         ,
-
     debug: region.debug,
-
     region,
-
     offset: off,
-
   };
 
 }
