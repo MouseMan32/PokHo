@@ -14,7 +14,6 @@ import {
   readMetadata as xyReadMeta, // placeholder currently
   readBoxes as xyReadBoxes,
   findBoxRegion,
-  XY,
   xyAutoPickOffsetFast,
 } from "./parsers/gen6_xy.mjs";
 
