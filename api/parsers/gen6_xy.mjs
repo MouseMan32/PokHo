@@ -80,7 +80,7 @@ function decodePK6(slotBuf) {
   if (!slotBuf || slotBuf.length < XY.SLOT_SIZE) return null;
 
   const ec = slotBuf.readUInt32LE(0x00);
-  const checksum = slotBuf.readUInt16LE(0x06);
+  const checksum = slotBuf.readUInt16LE(0x04);
   const enc224 = slotBuf.subarray(0x08, 0x08 + 224);
 
   const dec = decrypt224(enc224, ec);
@@ -152,7 +152,7 @@ export function scoreXYRegion(buf, offset) {
   }
 
   // Weighted score: reward valid checksums & plausible species; penalize bads
-const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
+  const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
   return { score, ok, zeros, bad, plausibleSpecies, shinyCount };
 }
 
@@ -188,97 +188,20 @@ function scoreXYRegionFast(buf, offset, { sampleStride = 12, badEarlyOut = 30 } 
   return { score: ok * 2 + plausibleSpecies * 1 - bad * 0.5, ok, bad, plausibleSpecies };
 }
 
-function scoreOffsetForBox1(buf, base) {
-  const maxSlots = Math.min(90, Math.floor((buf.length - base) / XY.SLOT_SIZE)); // ~3 boxes
-  if (maxSlots <= 0) return { valid: 0, unique: 0, speciesCounts: {}, tidLeader: null, tidConsensus: 0, score: 0 };
-
-  let valid = 0;
-  const speciesCounts = new Map();  // species -> count
-  const tidCounts = new Map();      // "tid/sid" -> count
-
-  for (let i = 0; i < maxSlots; i++) {
-    const start = base + i * XY.SLOT_SIZE;
-    const end = start + XY.SLOT_SIZE;
-    const slice = buf.subarray(start, end);
-
-    // zero fast-path
-    let nz = false;
-    for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nz = true; break; } }
-    if (!nz) continue;
-
-    const d = decodePK6(slice);  // already requires checksumOK + species in 1..721
-    if (!d) continue;
-
-    valid++;
-    speciesCounts.set(d.species, (speciesCounts.get(d.species) || 0) + 1);
-    const key = `${d.tid}/${d.sid}`;
-    tidCounts.set(key, (tidCounts.get(key) || 0) + 1);
-  }
-
-  const unique = speciesCounts.size;
-
-  // Leader (most common) TID/SID and its share
-  let tidLeader = null, tidMax = 0;
-  for (const [k, c] of tidCounts) {
-    if (c > tidMax) { tidMax = c; tidLeader = k; }
-  }
-  const tidConsensus = valid > 0 ? tidMax / valid : 0;
-
-  // Heuristic: prefer many valids, diverse species, and strong TID/SID consensus
-  // small penalty if a single species dominates unrealistically
-  let dom = 0;
-  for (const c of speciesCounts.values()) dom = Math.max(dom, c);
-  const dominationPenalty = dom > 12 ? (dom - 12) * 0.25 : 0;
-
-  const score =
-    valid * 1.0 +
-    unique * 0.5 +
-    tidConsensus * 15 -  // <- big boost for matching your trainer
-    dominationPenalty;
-
-  return {
-    valid,
-    unique,
-    speciesCounts: Object.fromEntries(speciesCounts),
-    tidLeader,
-    tidConsensus,
-    score,
-  };
-}
-
-
 // Brute-force around a hint with fast+full refinement (best for autofix)
-export function xyAutoPickOffsetFast(buf, hint = 0x22600) {
-  const window = [
-    ...Array.from({ length: 32 }, (_, k) => hint + k * 0x100),
-    ...Array.from({ length: 32 }, (_, k) => hint - (k + 1) * 0x100),
-  ].filter(n => Number.isInteger(n) && n >= 0 && n + XY.SLOT_SIZE < buf.length);
+export function xyAutoPickOffsetFast(buf, hint) {
+  const base = Number(hint || 0);
+  const bases = [base, base + 0x200, base - 0x200]; // handle size skew
 
-  const candidates = [];
-  for (const off of window) {
-    const s = scoreOffsetForBox1(buf, off);
-    candidates.push({ offset: off, ...s });
+  const coarse = [];
+  for (const h of bases) {
+    for (let d = -0x4000; d <= 0x4000; d += 0x80) { // coarse stride
+      const off = h + d;
+      if (off < 0 || off >= buf.length) continue;
+      const r = scoreXYRegionFast(buf, off, { sampleStride: 12, badEarlyOut: 30 });
+      coarse.push({ offset: off, coarse: r });
+    }
   }
-  candidates.sort((a, b) => b.score - a.score);
-
-  return {
-    best: best ? { offset: best.offset, ...best.full } : null,
-    top: refined.slice(0, 10)
-  };
-}
-
-export function refineAround(buf, base) {
-  if (!Number.isInteger(base)) return { offset: base, score: -Infinity };
-  const steps = [];
-  // search ±0x400 in multiples of SLOT_SIZE (232 bytes)
-  for (let delta = -0x400; delta <= 0x400; delta += XY.SLOT_SIZE) {
-    const off = base + delta;
-    if (off < 0 || off + XY.SLOT_SIZE >= buf.length) continue;
-    steps.push({ offset: off, ...scoreOffsetForBox1(buf, off) });
-  }
-  steps.sort((a, b) => b.score - a.score);
-  return steps[0] || { offset: base, score: -Infinity };
-}
   // shortlist
   coarse.sort((a, b) => b.coarse.score - a.coarse.score);
   const shortlist = coarse.slice(0, 15);
@@ -290,7 +213,7 @@ export function refineAround(buf, base) {
   }).sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
 
   const best = refined[0] || null;
-    return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
+  return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
 }
 
 // Legacy autopick (full brute around hint) – still exported if you want it
@@ -389,7 +312,9 @@ export function readBoxes(buf, overrideOffset) {
     d.checksumOK === true &&
     typeof d.species === "number" &&
     d.species >= 1 &&
-    d.species <= 721;
+    d.species <= 721 &&
+    typeof d.pid === "number" &&
+    d.pid !== 0;
 
   let lastNonEmptyBox = -1;
 
