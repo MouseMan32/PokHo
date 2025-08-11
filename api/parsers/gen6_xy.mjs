@@ -80,7 +80,7 @@ function decodePK6(slotBuf) {
   if (!slotBuf || slotBuf.length < XY.SLOT_SIZE) return null;
 
   const ec = slotBuf.readUInt32LE(0x00);
-  const checksum = slotBuf.readUInt16LE(0x04);
+  const checksum = slotBuf.readUInt16LE(0x06);
   const enc224 = slotBuf.subarray(0x08, 0x08 + 224);
 
   const dec = decrypt224(enc224, ec);
