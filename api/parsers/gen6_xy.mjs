@@ -344,16 +344,10 @@ export function readBoxes(buf, overrideOffset) {
   const region = findBoxRegion(buf, overrideOffset);
   const off = region.offset;
   const boxes = [];
+  const trimmed =
+    lastNonEmptyBox >= 0 ? boxes.slice(0, lastNonEmptyBox + 1) : boxes.slice(0, 1);
   if (off == null) {
-    return {
-      game: "Pokémon X/Y (Citra)",
-      generation: "6",
-      boxes: [],
-      notes: "XY region not found. Try scanning or setting an offset.",
-      debug: region.debug,
-      region,
-      offset: null,
-    };
+    return [];
   }
 
   const isValidMon = (d) =>
@@ -410,18 +404,6 @@ export function readBoxes(buf, overrideOffset) {
   // Trim trailing all-empty boxes (keep at least 1 to show the grid)
   const trimmed =
     lastNonEmptyBox >= 0 ? boxes.slice(0, lastNonEmptyBox + 1) : boxes.slice(0, 1);
-  return {
-    game: "Pokémon X/Y (Citra)",
-    generation: "6",
-    boxes: trimmed,
-    notes:
-      lastNonEmptyBox >= 0
-        ? `Showing ${trimmed.length} box(es).`
-        : "No valid Pokémon found in boxes."
-        ,
-    debug: region.debug,
-    region,
-    offset: off,
-  };
+  return trimmed;
 
 }
