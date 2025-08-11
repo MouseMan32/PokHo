@@ -223,9 +223,9 @@ export function xyAutoPickOffsetFast(buf, hintOffset = 0) {
   const XY = {
     SLOT_SIZE: 0xE8,          // 232
     SLOTS_PER_BOX: 30,
-    BOX_STRIDE: 0xE8 * 30,
-    decodeSlot: decodeSlot,   // use your existing function
+    decodeSlot: slotDecode
   };
+
 
   const len = buf.length;
   const stepCoarse = 0x400;   // 1KB stride to stay fast
