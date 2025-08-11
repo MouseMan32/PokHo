@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import "./home.css";
 import { fetchSpeciesName, getCachedName } from "./speciesNames";
 
+
 /** Sprites **/
 function spriteUrl(species?: number | null, shiny?: boolean) {
   if (!species) return null;
