@@ -62,6 +62,19 @@ function sum16le(buf) {
   }
   return sum & 0xffff;
 }
+
+// Alias the real slot decoder
+const slotDecode =
+  (typeof readSlot === "function" && readSlot) ||
+  (typeof decodePK6 === "function" && decodePK6) ||
+  (typeof decodeMon === "function" && decodeMon) ||
+  null;
+
+if (!slotDecode) {
+  throw new Error("XY parser: no slot decoder found.");
+}
+
+
 /* ----------------------------- Slot decode (PK6) ----------------------------- */
 /*** Minimal decode of a single 232-byte PK6 slice.
  * Returns: { checksumOK, species, nature, pid, tid, sid, shiny, preview, hash }
@@ -340,7 +353,7 @@ function scoreFirstBox(buf, base, XY) {
   for (let s = 0; s < XY.SLOTS_PER_BOX; s++) {
     const start = base + s * step, end = start + step;
     if (end > buf.length) { bad += (XY.SLOTS_PER_BOX - s); break; }
-    const mon = XY.decodeSlot(buf.subarray(start, end));
+    const mon = slotDecode(buf.subarray(start, end));
     if (mon && mon.checksumOK && mon.species >= 1 && mon.species <= 721) good++;
     else bad++;
   }
