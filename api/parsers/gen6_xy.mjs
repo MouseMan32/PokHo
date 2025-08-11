@@ -263,35 +263,6 @@ export function refineAround(buf, base) {
   return steps[0] || { offset: base, score: -Infinity };
 
 }
-
-  // shortlist
-
-  coarse.sort((a, b) => b.coarse.score - a.coarse.score);
-
-  const shortlist = coarse.slice(0, 15);
-
-
-
-  // refine with full scorer
-
-  const refined = shortlist.map(c => {
-
-    const full = scoreXYRegion(buf, c.offset);
-
-    return { offset: c.offset, full };
-
-  }).sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
-
-
-
-  const best = refined[0] || null;
-
-  return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
-
-}
-
-
-
 // Legacy autopick (full brute around hint) – still exported if you want it
 
 export function xyAutoPickOffset(buf, hint) {
