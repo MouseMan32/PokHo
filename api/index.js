@@ -13,6 +13,8 @@ import {
   readBoxes as xyReadBoxes,
   findBoxRegion,
   XY,
+  scoreXYRegion,        // <— optional if you use it
+  xyAutoPickOffset      // <— required for /autofix route
 } from "./parsers/gen6_xy.js";
 import { readMeta, writeMeta } from "./store/meta.js";
 
