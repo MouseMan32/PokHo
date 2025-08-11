@@ -5,6 +5,8 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import cors from "cors";
+import * as XY from "./parsers/gen6_xy.mjs";
+import { readMeta, writeMeta } from "./store/meta.js";
 
 import { detectFormat } from "./parsers/detect.mjs";
 import {
@@ -190,34 +192,53 @@ app.get("/api/debug/xy/:id/scan", (req, res) => {
 ----------------------------------------------------------------------------- */
 
 app.post("/api/saves/xy/autofix", (req, res) => {
-  const { id, hint } = req.body || {};
-  if (!id) return res.status(400).json({ error: "id required" });
+  try {
+    const { id, hint } = req.body || {};
+    if (!id) return res.status(400).json({ error: "id required" });
 
-  const filePath = path.join(SAVES_DIR, id);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+    const filePath = path.join(SAVES_DIR, id);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Save not found" });
+    }
 
-  const buf = fs.readFileSync(filePath);
-  if (!isLikelyXYSav(buf)) return res.status(400).json({ error: "Save does not look like XY" });
+    const buf = fs.readFileSync(filePath);
 
-  const meta = readMeta(id) || {};
-  const startHint = Number(hint ?? meta?.xy?.boxOffset ?? 0x22600);
+    // parse hint (if provided)
+    let hintNum = 0x22600; // default
+    if (typeof hint === "string" && hint.length) {
+      hintNum = /^0x/i.test(hint) ? Number(hint) : Number(hint);
+    } else if (typeof hint === "number") {
+      hintNum = hint;
+    }
 
-  const { best, top } = xyAutoPickOffsetFast(buf, startHint);
-  if (!best) return res.status(404).json({ error: "No plausible XY region found" });
+    // 1️⃣ Coarse scan near the hint
+    const fast = XY.xyAutoPickOffsetFast(buf, hintNum);
 
-  const m = readMeta(id);
-  m.xy = m.xy || {};
-  m.xy.boxOffset = best.offset;
-  writeMeta(id, m);
+    // 2️⃣ Fine-tune around the best offset
+    const chosen = fast.best
+      ? XY.refineAround(buf, fast.best.offset)
+      : null;
 
-  // drop any stale boxes cache for this id
-  try { fs.unlinkSync(boxesCachePath(id)); } catch {}
+    if (!chosen) {
+      return res.json({ ok: false, reason: "no-candidate" });
+    }
 
-  res.json({
-    ok: true,
-    chosen: { offset: best.offset, score: best.score },
-    top: top.slice(0, 10),
-  });
+    // 3️⃣ Save the new offset in the save's metadata
+    const meta = readMeta(id);
+    meta.xyRegionOffset = chosen.offset;
+    writeMeta(id, meta);
+
+    // 4️⃣ Return results to the client
+    res.json({
+      ok: true,
+      chosen,
+      top: fast.top
+    });
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 
 /* -----------------------------------------------------------------------------
