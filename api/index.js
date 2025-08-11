@@ -343,6 +343,59 @@ app.get("/api/boxes/:id/export", (req, res) => {
   res.send(Buffer.from(blob));
 });
 
+
+// Quick probe: decode a handful of slots at a given offset to sanity-check alignment
+app.get("/api/debug/xy/:id/probe", (req, res) => {
+  const id = req.params.id;
+  const offStr = String(req.query.offset ?? "");
+  const filePath = path.join(SAVES_DIR, id);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Save not found" });
+
+  const buf = fs.readFileSync(filePath);
+
+  // parse hex (0x...) or decimal
+  let base = 0;
+  if (/^0x/i.test(offStr)) base = Number(offStr);
+  else base = Number(offStr);
+  if (!Number.isFinite(base) || base < 0) {
+    return res.status(400).json({ error: "Provide ?offset=0xHEX or decimal" });
+  }
+
+  const results = [];
+  const take = 20; // examine first ~20 slots (almost box 1)
+  for (let i = 0; i < take; i++) {
+    const start = base + i * XY.SLOT_SIZE;
+    const end = start + XY.SLOT_SIZE;
+    if (end > buf.length) break;
+    const slice = buf.subarray(start, end);
+
+    // zero test
+    let nz = false;
+    for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nz = true; break; } }
+    if (!nz) {
+      results.push({ slot: i + 1, empty: true });
+      continue;
+    }
+
+    const d = XY.decodeSlot(slice);
+    if (!d) {
+      results.push({ slot: i + 1, empty: true, note: "invalid" });
+      continue;
+    }
+    results.push({
+      slot: i + 1,
+      species: d.species,
+      pid: d.pid,
+      tid: d.tid,
+      sid: d.sid,
+      shiny: !!d.shiny,
+      checksumOK: d.checksumOK === true,
+    });
+  }
+
+  res.json({ offset: base, sampleCount: results.length, slots: results });
+});
+
 /* -----------------------------------------------------------------------------
   Start
 ----------------------------------------------------------------------------- */
