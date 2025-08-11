@@ -211,6 +211,75 @@ export function xyAutoPickOffset(buf, hint) {
     candidates.set(off, { offset: off, reason, ...r });
   };
 
+
+// ---- scoring & auto-pick helpers (ESM) ----
+
+export function scoreXYRegion(buf, offset) {
+  const BOXES = XY.BOXES;
+  const SLOTS = XY.SLOTS_PER_BOX;
+  const SIZE  = XY.SLOT_SIZE;
+
+  const totalSlots = BOXES * SLOTS;
+  let ok = 0, zeros = 0, bad = 0, shinyCount = 0, plausibleSpecies = 0;
+
+  for (let i = 0; i < totalSlots; i++) {
+    const start = offset + i * SIZE;
+    const end = start + SIZE;
+    if (end > buf.length) { bad += (totalSlots - i); break; }
+
+    const blob = buf.subarray(start, end);
+
+    // quick zero check
+    let allZero = true;
+    for (let j = 0; j < blob.length; j++) { if (blob[j] !== 0) { allZero = false; break; } }
+    if (allZero) { zeros++; continue; }
+
+    // minimal decode (must exist in your file)
+    let decoded = null;
+    try {
+      decoded = XY.decodeSlot ? XY.decodeSlot(blob) : null;
+    } catch { decoded = null; }
+
+    if (decoded && decoded.checksumOK === true) {
+      ok++;
+      if (decoded.shiny) shinyCount++;
+      if (typeof decoded.species === "number" && decoded.species >= 1 && decoded.species <= 721) {
+        plausibleSpecies++;
+      }
+    } else {
+      bad++;
+    }
+  }
+
+  // Weighted score: favor valid checksums & plausible species; penalize bads
+  const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
+  return { score, ok, zeros, bad, plausibleSpecies, shinyCount };
+}
+
+// ---- scoring & auto-pick helpers (ESM) ----
+export function xyAutoPickOffset(buf, hint) {
+  const candidates = new Map(); // offset -> result
+  const push = (off, reason) => {
+    if (off < 0 || off >= buf.length) return;
+    if (candidates.has(off)) return;
+    const r = scoreXYRegion(buf, off);
+    candidates.set(off, { offset: off, reason, ...r });
+  };
+
+  const baseHints = [Number(hint || 0), Number(hint || 0) + 0x200, Number(hint || 0) - 0x200];
+
+  for (const h of baseHints) {
+    for (let d = -0x4000; d <= 0x4000; d += 0x10) {
+      push(h + d, (h === baseHints[0] ? "hint" : (h > baseHints[0] ? "+0x200" : "-0x200")));
+    }
+  }
+
+  const top = Array.from(candidates.values())
+    .sort((a, b) => b.score - a.score || a.bad - b.bad);
+
+  return { best: top[0], top };
+}
+  
   const baseHints = [hint, hint + 0x200, hint - 0x200];
 
   for (const h of baseHints) {
