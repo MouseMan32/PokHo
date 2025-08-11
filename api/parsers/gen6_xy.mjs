@@ -255,10 +255,16 @@ export function xyAutoPickOffsetFast(buf, hint = 0x22600) {
   ].filter(n => Number.isInteger(n) && n >= 0 && n + XY.SLOT_SIZE < buf.length);
 
   const candidates = [];
-  for (const off of window) candidates.push({ offset: off, ...scoreOffsetForBox1(buf, off) });
+  for (const off of window) {
+    const s = scoreOffsetForBox1(buf, off);
+    candidates.push({ offset: off, ...s });
+  }
   candidates.sort((a, b) => b.score - a.score);
 
-  return { best: candidates[0] || null, top: candidates.slice(0, 10) };
+  return {
+    best: best ? { offset: best.offset, ...best.full } : null,
+    top: refined.slice(0, 10)
+  };
 }
 
 export function refineAround(buf, base) {
