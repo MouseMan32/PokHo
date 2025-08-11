@@ -152,7 +152,7 @@ export function scoreXYRegion(buf, offset) {
   }
 
   // Weighted score: reward valid checksums & plausible species; penalize bads
-  const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
+const score = (ok * 2) + (plausibleSpecies * 1) + (shinyCount * 0.25) - (bad * 0.5);
   return { score, ok, zeros, bad, plausibleSpecies, shinyCount };
 }
 
