@@ -92,7 +92,7 @@ function decodePK6(slotBuf) {
   // PK6: Growth block at start of unshuffled data
   const pid = data.readUInt32LE(0x00);
   const species = data.readUInt16LE(0x08);      // species dex id
-  const nature = data.readUInt8(0x1c);          // nature index (0..24) in PK6
+  const nature = data.readUInt8(0x1c);          // 0..24
   // Trainer IDs (Gen6 uses 32-bit, stored as two 16-bit halves)
   const tid = data.readUInt16LE(0x0c);
   const sid = data.readUInt16LE(0x0e);
@@ -101,7 +101,6 @@ function decodePK6(slotBuf) {
   const shinyXor = ((pid & 0xffff) ^ (pid >>> 16) ^ tid ^ sid) & 0xffff;
   const shiny = shinyXor < 16;
 
-  // Tiny preview & stable hash for debugging
   const preview = `PID=${pid.toString(16)} SPEC=${species} NAT=${nature}`;
   const hash = crypto.createHash("sha1").update(slotBuf).digest("hex").slice(0, 12);
 
@@ -117,7 +116,6 @@ export function isLikelyXYSav(buf) {
   return !!buf && XY_EXPECTED_SIZES.includes(buf.length);
 }
 
-// Fast zero check
 function isAllZero(buf) {
   for (let i = 0; i < buf.length; i++) if (buf[i] !== 0) return false;
   return true;
@@ -125,7 +123,7 @@ function isAllZero(buf) {
 
 /* -------------------------- Region finding & scoring ------------------------- */
 
-// Heuristic: score an XY box-region offset by how many plausible PK6 slots we see.
+// Full scorer: checks all 31*30 slots
 export function scoreXYRegion(buf, offset) {
   const totalSlots = XY.BOXES * XY.SLOTS_PER_BOX;
   const size = XY.SLOT_SIZE;
@@ -158,7 +156,67 @@ export function scoreXYRegion(buf, offset) {
   return { score, ok, zeros, bad, plausibleSpecies, shinyCount };
 }
 
-// Brute-force around a hint; also test ±0x200 variants for size skew
+// Fast sample scorer for coarse scans
+function scoreXYRegionFast(buf, offset, { sampleStride = 12, badEarlyOut = 30 } = {}) {
+  const size = XY.SLOT_SIZE;
+  const totalSlots = XY.BOXES * XY.SLOTS_PER_BOX;
+
+  let ok = 0, bad = 0, plausibleSpecies = 0;
+
+  for (let i = 0; i < totalSlots; i += sampleStride) {
+    const start = offset + i * size;
+    const end = start + size;
+    if (end > buf.length) { bad += 5; break; } // heavy penalty if OOB
+    const slice = buf.subarray(start, end);
+
+    // quick non-zero test
+    let nz = false;
+    for (let j = 0; j < slice.length; j++) { if (slice[j] !== 0) { nz = true; break; } }
+    if (!nz) continue;
+
+    let d = null;
+    try { d = decodePK6(slice); } catch {}
+
+    if (d && d.checksumOK === true) {
+      ok++;
+      if (typeof d.species === "number" && d.species >= 1 && d.species <= 721) plausibleSpecies++;
+    } else {
+      bad++;
+      if (bad >= badEarlyOut) break;
+    }
+  }
+  return { score: ok * 2 + plausibleSpecies * 1 - bad * 0.5, ok, bad, plausibleSpecies };
+}
+
+// Brute-force around a hint with fast+full refinement (best for autofix)
+export function xyAutoPickOffsetFast(buf, hint) {
+  const base = Number(hint || 0);
+  const bases = [base, base + 0x200, base - 0x200]; // handle size skew
+
+  const coarse = [];
+  for (const h of bases) {
+    for (let d = -0x4000; d <= 0x4000; d += 0x80) { // coarse stride
+      const off = h + d;
+      if (off < 0 || off >= buf.length) continue;
+      const r = scoreXYRegionFast(buf, off, { sampleStride: 12, badEarlyOut: 30 });
+      coarse.push({ offset: off, coarse: r });
+    }
+  }
+  // shortlist
+  coarse.sort((a, b) => b.coarse.score - a.coarse.score);
+  const shortlist = coarse.slice(0, 15);
+
+  // refine with full scorer
+  const refined = shortlist.map(c => {
+    const full = scoreXYRegion(buf, c.offset);
+    return { offset: c.offset, full };
+  }).sort((a, b) => b.full.score - a.full.score || a.full.bad - b.full.bad);
+
+  const best = refined[0] || null;
+  return { best: best ? { offset: best.offset, ...best.full } : null, top: refined.slice(0, 10) };
+}
+
+// Legacy autopick (full brute around hint) – still exported if you want it
 export function xyAutoPickOffset(buf, hint) {
   const candidates = new Map(); // offset -> result
   const push = (off, reason) => {
@@ -185,23 +243,20 @@ export function xyAutoPickOffset(buf, hint) {
 
 /* ----------------------------- Public XY helpers ---------------------------- */
 
-// Scan broadly to find top candidate regions (used by /debug/xy/:id/scan)
+// Coarse scan to surface promising regions (used by /debug/xy/:id/scan)
 function scanCandidates(buf) {
-  const step = 0x100; // coarse stride; adjust if needed
+  const step = 0x100; // coarse stride
   const max = Math.max(0, buf.length - XY.SLOT_SIZE * XY.BOXES * XY.SLOTS_PER_BOX);
   const results = [];
 
   for (let off = 0; off <= max; off += step) {
-    const r = scoreXYRegion(buf, off);
-    // Keep only promising ones
-    if (r.ok > 40 && r.score > 20) {
+    const r = scoreXYRegionFast(buf, off, { sampleStride: 10, badEarlyOut: 30 });
+    if (r.ok >= 8 && r.score > 8) {
       results.push({ offset: off, ...r });
     }
   }
 
-  // sort descending by score
   results.sort((a, b) => b.score - a.score || a.bad - b.bad);
-  // return top few to keep payload small
   return results.slice(0, 25);
 }
 
@@ -209,19 +264,17 @@ export function findBoxRegion(buf, overrideOffset) {
   if (Number.isInteger(overrideOffset) && overrideOffset >= 0) {
     return { offset: Number(overrideOffset), debug: [{ offset: Number(overrideOffset), note: "override" }] };
   }
-  // try a broad scan; if empty, widen by trying ±0x200 on a common seed
+  // try a broad scan; if empty, widen by trying ±0x200 around a common seed
   let cands = scanCandidates(buf);
   if (!cands.length) {
     const seeds = [0x22600, 0x22600 + 0x200, 0x22600 - 0x200];
     for (const s of seeds) {
-      const local = [];
-      for (let d = -0x4000; d <= 0x4000; d += 0x20) {
+      for (let d = -0x4000; d <= 0x4000; d += 0x80) {
         const off = s + d;
         if (off < 0) continue;
-        const r = scoreXYRegion(buf, off);
-        if (r.ok > 40 && r.score > 20) local.push({ offset: off, ...r });
+        const r = scoreXYRegionFast(buf, off, { sampleStride: 12, badEarlyOut: 30 });
+        if (r.ok >= 6 && r.score > 6) cands.push({ offset: off, ...r });
       }
-      cands = cands.concat(local);
     }
     cands.sort((a, b) => b.score - a.score || a.bad - b.bad);
     cands = cands.slice(0, 25);
@@ -232,9 +285,8 @@ export function findBoxRegion(buf, overrideOffset) {
 
 /* ----------------------------- Metadata & Boxes ----------------------------- */
 
-export function readMetadata(buf) {
-  // Minimal trainer metadata (extend as needed)
-  // In PK6, OT name etc. live in different blocks; keeping this minimal for now.
+export function readMetadata(_buf) {
+  // Minimal placeholder; extend if/when you decode trainer data
   return { trainer: null };
 }
 
@@ -254,8 +306,6 @@ export function readBoxes(buf, overrideOffset) {
       offset: null,
     };
   }
-
-  const totalSlots = XY.BOXES * XY.SLOTS_PER_BOX;
 
   for (let b = 0; b < XY.BOXES; b++) {
     const mons = [];
@@ -300,6 +350,3 @@ export function readBoxes(buf, overrideOffset) {
     offset: off,
   };
 }
-
-/* --------------------------------- Exports ---------------------------------- */
-// (All exported above with `export` keywords)
