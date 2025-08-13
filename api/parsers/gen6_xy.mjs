@@ -376,9 +376,17 @@ function refineToBoxStart(buf, off, XY) {
 
 
 export function findBoxRegion(buf, overrideOffset) {
-  if (Number.isInteger(overrideOffset) && overrideOffset >= 0) {
-    return { offset: Number(overrideOffset), debug: [{ offset: Number(overrideOffset), note: "override" }] };
+  // Accept number OR string like "0x22600" or "140800"
+  if (overrideOffset != null) {
+    const n = (typeof overrideOffset === "string")
+      ? Number(overrideOffset)     // handles "0x..." and decimals
+      : overrideOffset;
+    if (Number.isFinite(n) && n >= 0) {
+      return { offset: n, debug: { source: "override" } };
+    }
   }
+  // ...rest of your function unchanged...
+}
 const fast = xyAutoPickOffsetFast(buf, 0x0); // hint optional
 let off = fast?.best?.offset ?? null;
 if (off != null) off = refineToBoxStart(buf, off, XY); // XY in scope or pass in
