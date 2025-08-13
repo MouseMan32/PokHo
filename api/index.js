@@ -240,7 +240,7 @@ app.get("/api/boxes/:id/export", (req, res) => {
     const id = req.params.id;
     const b = parseInt(String(req.query.box || "1"), 10);
     const s = parseInt(String(req.query.slot || "1"), 10);
-    if (!Number.isFinite(b) || !Number.isFinite(s) || b < 1 || s < 1 || s > XY.XY.SLOTS_PER_BOX) {
+    if (!Number.isFinite(b) || !Number.isFinite(s) || b < 1 || s < 1 || s > XY.SLOTS_PER_BOX) {
       return res.status(400).json({ error: "box/slot invalid" });
     }
 
@@ -254,9 +254,9 @@ app.get("/api/boxes/:id/export", (req, res) => {
       return res.status(400).json({ error: "No XY offset known. Open boxes first or run autofix." });
     }
 
-    const idx = (b - 1) * XY.XY.SLOTS_PER_BOX + (s - 1);
-    const start = offset + idx * XY.XY.SLOT_SIZE;
-    const end = start + XY.XY.SLOT_SIZE;
+    const idx = (b - 1) * XY.SLOTS_PER_BOX + (s - 1);
+    const start = offset + idx * XY.SLOT_SIZE;
+    const end = start + XY.SLOT_SIZE;
     if (end > buf.length) return res.status(400).json({ error: "Slice out of range" });
 
     const slice = buf.subarray(start, end);
@@ -307,8 +307,8 @@ app.get("/api/debug/xy/:id/probe", (req, res) => {
   const results = [];
   const take = 20;
   for (let i = 0; i < take; i++) {
-    const start = base + i * XY.XY.SLOT_SIZE;
-    const end = start + XY.XY.SLOT_SIZE;
+    const start = base + i * XY.SLOT_SIZE;
+    const end = start + XY.SLOT_SIZE;
     if (end > buf.length) break;
     const slice = buf.subarray(start, end);
 
