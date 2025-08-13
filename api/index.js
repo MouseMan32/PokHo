@@ -187,33 +187,34 @@ app.get("/api/boxes/:id", (req, res) => {
     const meta = readMeta(id) || {};
     // Use saved offset if present; else pick/refine; else try findBoxRegion
 let offset = Number(meta.xyRegionOffset);
-
-// Recompute if missing/invalid or caller forced a refresh (?recalc=1)
 const forceRecalc = String(req.query.recalc || "") === "1";
+
 if (!Number.isInteger(offset) || offset < 0 || forceRecalc) {
-  // NEW: prefer the refined picker
+  // 1) Prefer the new refined picker
   const region = XY.findBoxRegion(buf, null);
   let picked = region?.offset ?? null;
 
-  // Fallback to legacy fast+refine (no hint bias)
+  // 2) Fallback to legacy fast+refine, but with NO hint bias
   if (!Number.isInteger(picked) || picked < 0) {
-    const fast = XY.xyAutoPickOffsetFast(buf, 0x0); // 0x0 = sweep whole file
+    const fast = XY.xyAutoPickOffsetFast(buf, 0x0);
     const choice = fast?.best ? XY.refineAround(buf, fast.best.offset) : null;
     picked = choice?.offset ?? null;
   }
 
-  // Last-resort default (keeps something showing during dev)
-  if (!Number.isInteger(picked) || picked < 0) {
-    picked = 0x22600;
-  }
+  // 3) Last-resort: only if you want a guaranteed non-null during dev
+  // (Comment this out for now so we can *see* nulls instead of silently 0x22600)
+  // if (!Number.isInteger(picked) || picked < 0) picked = 0x22600;
 
-  offset = picked;
+  offset = picked ?? null;
   meta.xyRegionOffset = offset;
   writeMeta(id, meta);
 
-  // Optional: one-line debug
-  console.log(`XY pick for ${id}: offset=0x${offset.toString(16)}`);
+  console.log(`XY pick for ${id}:`, {
+    offset: offset == null ? null : `0x${offset.toString(16)}`,
+    source: region?.debug?.source || "unknown",
+  });
 }
+
 
 
     const boxes = XY.readBoxes(buf, offset);
